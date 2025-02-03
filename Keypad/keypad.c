@@ -199,9 +199,53 @@ static void alarm_irq(void) {
     gpio_put(ISR_GPIO, 0) ;
 
 }
-static void scan(void){
-    
+
+// key scan function, return keycode
+static int scan(void) {
+    // Some variables
+    static int i ;
+    static uint32_t keypad ;
+    // Scan the keypad!
+    for (i=0; i<KEYROWS; i++) {
+        // Set a row high
+        gpio_put_masked((0xF << BASE_KEYPAD_PIN),
+                        (scancodes[i] << BASE_KEYPAD_PIN)) ;
+        // Small delay required
+        sleep_us(1) ; 
+        // Read the keycode
+        keypad = ((gpio_get_all() >> BASE_KEYPAD_PIN) & 0x7F) ;
+        // Break if button(s) are pressed
+        if (keypad & button) break ;
+    }
+    // If we found a button . . .
+    if (keypad & button) {
+        // Look for a valid keycode.
+        for (i=0; i<NUMKEYS; i++) {
+            if (keypad == keycodes[i]) break ; // va
+        }
+        // If we don't find one, report invalid keycode
+        if (i==NUMKEYS) (i = -1) ;
+    }
+    // Otherwise, indicate invalid/non-pressed buttons
+    else (i=-1) ;
+    // Print key to terminal
+    printf("\n%d", i) ;
+    return i;
 }
+
+// Add enum for debounce states
+typedef enum {
+    RESET,
+    KEY_NOT_PRESSED,
+    KEY_MAYBE_PRESSED,
+    KEY_PRESSED,
+    KEY_MAYBE_NOT_PRESSED
+} KeyState;
+
+// key state machine
+static KeyState key_state = RESET;
+static int keycode = -1;
+static int possible = -1;
 
 // This thread runs on core 0
 static PT_THREAD (protothread_core_0(struct pt *pt))
@@ -209,70 +253,62 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
     // Indicate thread beginning
     PT_BEGIN(pt) ;
 
-    // Some variables
-    static int i ;
-    static uint32_t keypad ;
-
-    // Add enum for debounce states
-    typedef enum {
-        RESET,
-        KEY_NOT_PRESSED,
-        KEY_MAYBE_PRESSED,
-        KEY_PRESSED,
-        KEY_MAYBE_NOT_PRESSED
-    } KeyState;
-
-    // Add these variables near other globals
-    static KeyState key_state = RESET;
-    
-
     while(1) {
-
         gpio_put(LED, !gpio_get(LED)) ;
-
-        // Scan the keypad!
-        for (i=0; i<KEYROWS; i++) {
-            // Set a row high
-            gpio_put_masked((0xF << BASE_KEYPAD_PIN),
-                            (scancodes[i] << BASE_KEYPAD_PIN)) ;
-            // Small delay required
-            sleep_us(1) ; 
-            // Read the keycode
-            keypad = ((gpio_get_all() >> BASE_KEYPAD_PIN) & 0x7F) ;
-            // Break if button(s) are pressed
-            if (keypad & button) break ;
-        }
-        // If we found a button . . .
-        if (keypad & button) {
-            // Look for a valid keycode.
-            for (i=0; i<NUMKEYS; i++) {
-                if (keypad == keycodes[i]) break ; // va
-            }
-            // If we don't find one, report invalid keycode
-            if (i==NUMKEYS) (i = -1) ;
-        }
-        // Otherwise, indicate invalid/non-pressed buttons
-        else (i=-1) ;
-
         switch(key_state){
             case RESET:
+                key_state = KEY_NOT_PRESSED;
+                keycode = scan();
+                break;
+            case KEY_NOT_PRESSED:
+                if (keycode == -1){
+                    key_state = KEY_NOT_PRESSED;
+                }
+                else {
+                    possible = keycode;
+                    keycode = scan();
+                    key_state = KEY_MAYBE_PRESSED;
+                }
+                break;
+            case KEY_MAYBE_PRESSED:
+                if (keycode == possible) {
+                    // take an action
+                    keycode = scan();
+                    key_state = KEY_PRESSED;
+                }
+                else {
+                    keycode = scan();
+                    key_state = KEY_NOT_PRESSED;
+                }
+                break;
+            case KEY_PRESSED:
+                if (keycode == possible) {
+                    // take an action
+                    keycode = scan();
+                    key_state = KEY_PRESSED;
+                }
+                else {
+                    keycode = scan();
+                    key_state = KEY_MAYBE_NOT_PRESSED;
+                }
+                break;
+            case KEY_MAYBE_NOT_PRESSED:
+                if (keycode == possible) {
+                    // take an action
+                    keycode = scan();
+                    key_state = KEY_PRESSED;
+                }
+                else {
+                    keycode = scan();
+                    key_state = KEY_NOT_PRESSED;
+                }
+                break;
+            default:
+                keycode = -1;
+                possible = -1;
+                break;
 
         }
-
-
-
-        // Write key to VGA
-        if (i != prev_key) {
-            prev_key = i ;
-            fillRect(250, 20, 176, 30, RED); // red box
-            sprintf(keytext, "%d", i) ;
-            setCursor(250, 20) ;
-            setTextSize(2) ;
-            writeString(keytext) ;
-        }
-
-        // Print key to terminal
-        printf("\n%d", i) ;
 
         PT_YIELD_usec(30000) ;
     }
