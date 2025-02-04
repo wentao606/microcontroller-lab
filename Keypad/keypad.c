@@ -108,6 +108,7 @@ fix15 attack_inc ;                      // rate at which sound ramps up
 fix15 decay_inc ;                       // rate at which sound ramps down
 fix15 current_amplitude_0 = 0 ;         // current amplitude (modified in ISR)
 fix15 current_amplitude_1 = 0 ;         // current amplitude (modified in ISR)
+fix15 swoop_amplitude = -260 ;          // amplitude of swoop
 // Timing parameters for beeps (units of interrupts)
 #define ATTACK_TIME             250
 #define DECAY_TIME              250
@@ -153,7 +154,7 @@ static void alarm_irq(void) {
 
     // // Reset the alarm register
     // timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
-
+   
     if (STATE_0 == 0) {
         // DDS phase and sine table lookup
         phase_accum_main_0 += phase_incr_main_0  ;
@@ -255,6 +256,7 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
 
     while(1) {
         gpio_put(LED, !gpio_get(LED)) ;
+        // printf("\n current state:%d", key_state);
         switch(key_state){
             case RESET:
                 key_state = KEY_NOT_PRESSED;
@@ -263,6 +265,7 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
             case KEY_NOT_PRESSED:
                 if (keycode == -1){
                     key_state = KEY_NOT_PRESSED;
+                    keycode = scan();
                 }
                 else {
                     possible = keycode;
@@ -284,6 +287,7 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
             case KEY_PRESSED:
                 if (keycode == possible) {
                     // take an action
+                    printf("\n KEY_PRESSED:%d", keycode);
                     keycode = scan();
                     key_state = KEY_PRESSED;
                 }
