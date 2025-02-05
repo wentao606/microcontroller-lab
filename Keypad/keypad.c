@@ -114,7 +114,7 @@ fix15 current_amplitude_1 = 0 ;         // current amplitude (modified in ISR)
 #define ATTACK_TIME             250
 #define DECAY_TIME              250
 #define SUSTAIN_TIME            10000
-#define BEEP_DURATION           10500
+#define BEEP_DURATION           6500
 #define BEEP_REPEAT_INTERVAL    50000
 
 // State machine variables
@@ -150,6 +150,7 @@ static int STATE = -1;
 
 // This timer ISR is called on core 0
 static void alarm_irq(void) {
+    int frequency;
     // printf("\n alarm: %d", STATE);
     // Assert a GPIO when we enter the interrupt
     gpio_put(ISR_GPIO, 1) ;
@@ -162,7 +163,44 @@ static void alarm_irq(void) {
 
     if (STATE == 0) {
         // DDS phase and sine table lookup
-        phase_accum_main_0 += phase_incr_main_0  ;
+        frequency = (int)(count_0 * count_0 * (0.000153) + 2000);
+        // printf("\n %d", frequency);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        // phase_accum_main_0 += phase_incr_main_0  ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;
+
+        // Ramp up amplitude
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+        }
+        // Ramp down amplitude
+        else if (count_0 > BEEP_DURATION - DECAY_TIME) {
+            current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+        }
+
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+        // Increment the counter
+        count_0 += 1 ;
+        // printf("\n count:%d", count_0);
+        // State transition?
+        if (count_0 == BEEP_DURATION) {
+            STATE = -1 ;
+            count_0 = 0 ;
+            // printf("\n after duration:%d", STATE);
+        }
+    }
+    else if (STATE == 1){
+                // DDS phase and sine table lookup
+        frequency = (int)(-260.0 * sin((-M_PI / BEEP_DURATION) * count_0) + 1740.0);
+        // printf("\n %d", frequency);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        // phase_accum_main_0 += phase_incr_main_0  ;
         DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
             sin_table[phase_accum_main_0>>24])) + 2048 ;
 
@@ -287,10 +325,12 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
                     keycode = scan();
                     key_state = KEY_PRESSED;
                     // take an action
-                    STATE = 0;
+                    if (possible == 1) 
+                        STATE = 0;
+                    else if (possible == 2)
+                        STATE = 1;
                     current_amplitude_0 = 0;
                     count_0 = 0;
-
                 }
                 else {
                     keycode = scan();
