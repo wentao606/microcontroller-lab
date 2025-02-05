@@ -45,6 +45,7 @@
 #include "pt_cornell_rp2040_v1_3.h"
 
 
+
 // Keypad pin configurations
 #define BASE_KEYPAD_PIN 9
 #define KEYROWS         4
@@ -68,7 +69,7 @@ int prev_key = 0;
 #define STATE_PRESSED 2
 #define STATE_MAYBE_NOT_PRESSED 3
 
-// BEEP
+// Beep
 // Low-level alarm infrastructure we'll be using
 #define ALARM_NUM 0
 #define ALARM_IRQ TIMER_IRQ_0
@@ -108,7 +109,7 @@ fix15 attack_inc ;                      // rate at which sound ramps up
 fix15 decay_inc ;                       // rate at which sound ramps down
 fix15 current_amplitude_0 = 0 ;         // current amplitude (modified in ISR)
 fix15 current_amplitude_1 = 0 ;         // current amplitude (modified in ISR)
-fix15 swoop_amplitude = -260 ;          // amplitude of swoop
+
 // Timing parameters for beeps (units of interrupts)
 #define ATTACK_TIME             250
 #define DECAY_TIME              250
@@ -142,21 +143,24 @@ uint16_t DAC_data_0 ; // output value
 //GPIO for timing the ISR
 #define ISR_GPIO 2
 
-//Define the sound state
-static int sound_i;
+static int STATE = -1;
+// static int current_amplitude_0 = 0;
+// static int count_0 = 0;
 
+
+// This timer ISR is called on core 0
 static void alarm_irq(void) {
-
+    // printf("\n alarm: %d", STATE);
     // Assert a GPIO when we enter the interrupt
     gpio_put(ISR_GPIO, 1) ;
 
-    // // Clear the alarm irq
-    // hw_clear_bits(&timer_hw->intr, 1u << ALARM_NUM);
+    // Clear the alarm irq
+    hw_clear_bits(&timer_hw->intr, 1u << ALARM_NUM);
 
-    // // Reset the alarm register
-    // timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
-   
-    if (STATE_0 == 0) {
+    // Reset the alarm register
+    timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
+
+    if (STATE == 0) {
         // DDS phase and sine table lookup
         phase_accum_main_0 += phase_incr_main_0  ;
         DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
@@ -179,11 +183,12 @@ static void alarm_irq(void) {
 
         // Increment the counter
         count_0 += 1 ;
-
+        // printf("\n count:%d", count_0);
         // State transition?
         if (count_0 == BEEP_DURATION) {
-            STATE_0 = 1 ;
+            STATE = -1 ;
             count_0 = 0 ;
+            // printf("\n after duration:%d", STATE);
         }
     }
 
@@ -192,7 +197,7 @@ static void alarm_irq(void) {
         count_0 += 1 ;
         if (count_0 == BEEP_REPEAT_INTERVAL) {
             current_amplitude_0 = 0 ;
-            STATE_0 = 0 ;
+            //STATE_0 = 0 ;
             count_0 = 0 ;
         }
     }
@@ -201,6 +206,9 @@ static void alarm_irq(void) {
     gpio_put(ISR_GPIO, 0) ;
 
 }
+
+// Beep end
+
 
 // key scan function, return keycode
 static int scan(void) {
@@ -231,7 +239,7 @@ static int scan(void) {
     // Otherwise, indicate invalid/non-pressed buttons
     else (i=-1) ;
     // Print key to terminal
-    printf("\n%d", i) ;
+    // printf("\n%d", i) ;
     return i;
 }
 
@@ -276,9 +284,13 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
                 break;
             case KEY_MAYBE_PRESSED:
                 if (keycode == possible) {
-                    // take an action
                     keycode = scan();
                     key_state = KEY_PRESSED;
+                    // take an action
+                    STATE = 0;
+                    current_amplitude_0 = 0;
+                    count_0 = 0;
+
                 }
                 else {
                     keycode = scan();
@@ -287,8 +299,7 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
                 break;
             case KEY_PRESSED:
                 if (keycode == possible) {
-                    // take an action
-                    printf("\n KEY_PRESSED:%d", keycode);
+                    
                     keycode = scan();
                     key_state = KEY_PRESSED;
                 }
@@ -299,7 +310,6 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
                 break;
             case KEY_MAYBE_NOT_PRESSED:
                 if (keycode == possible) {
-                    // take an action
                     keycode = scan();
                     key_state = KEY_PRESSED;
                 }
@@ -326,38 +336,14 @@ int main() {
 
     // Initialize stdio
     stdio_init_all();
-    printf("Hello, friends!\n");
-
-    // Initialize the VGA screen
-    initVGA() ;
-
-    // Draw some filled rectangles
-    fillRect(64, 0, 176, 50, BLUE); // blue box
-    fillRect(250, 0, 176, 50, RED); // red box
-    fillRect(435, 0, 176, 50, GREEN); // green box
-
-    // Write some text
-    setTextColor(WHITE) ;
-    setCursor(65, 0) ;
-    setTextSize(1) ;
-    writeString("Raspberry Pi Pico") ;
-    setCursor(65, 10) ;
-    writeString("Keypad demo") ;
-    setCursor(65, 20) ;
-    writeString("Hunter Adams") ;
-    setCursor(65, 30) ;
-    writeString("vha3@cornell.edu") ;
-    setCursor(250, 0) ;
-    setTextSize(2) ;
-    writeString("Key Pressed:") ;
 
     // Map LED to GPIO port, make it low
     gpio_init(LED) ;
     gpio_set_dir(LED, GPIO_OUT) ;
     gpio_put(LED, 0) ;
 
-    /////////////BEEP////////////
 
+    // Beep
     // Initialize SPI channel (channel, baud rate set to 20MHz)
     spi_init(SPI_PORT, 20000000) ;
     // Format (channel, data bits per transfer, polarity, phase, order)
@@ -373,6 +359,16 @@ int main() {
     gpio_init(LDAC) ;
     gpio_set_dir(LDAC, GPIO_OUT) ;
     gpio_put(LDAC, 0) ;
+
+    // Setup the ISR-timing GPIO
+    gpio_init(ISR_GPIO) ;
+    gpio_set_dir(ISR_GPIO, GPIO_OUT);
+    gpio_put(ISR_GPIO, 0) ;
+
+    // Map LED to GPIO port, make it low
+    gpio_init(LED) ;
+    gpio_set_dir(LED, GPIO_OUT) ;
+    gpio_put(LED, 0) ;
 
     // set up increments for calculating bow envelope
     attack_inc = divfix(max_amplitude, int2fix15(ATTACK_TIME)) ;
@@ -393,7 +389,7 @@ int main() {
     irq_set_enabled(ALARM_IRQ, true) ;
     // Write the lower 32 bits of the target time to the alarm register, arming it.
     timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
-
+    //Beep end
 
     ////////////////// KEYPAD INITS ///////////////////////
     // Initialize the keypad GPIO's
