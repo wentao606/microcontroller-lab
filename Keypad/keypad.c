@@ -142,12 +142,13 @@ uint16_t DAC_data_0 ; // output value
 //GPIO for timing the ISR
 #define ISR_GPIO 2
 
-
+//Define the sound state
+static int sound_i;
 
 static void alarm_irq(void) {
 
-    // // Assert a GPIO when we enter the interrupt
-    // gpio_put(ISR_GPIO, 1) ;
+    // Assert a GPIO when we enter the interrupt
+    gpio_put(ISR_GPIO, 1) ;
 
     // // Clear the alarm irq
     // hw_clear_bits(&timer_hw->intr, 1u << ALARM_NUM);
@@ -384,6 +385,14 @@ int main() {
          sin_table[ii] = float2fix15(2047*sin((float)ii*6.283/(float)sine_table_size));
     }
 
+    // Enable the interrupt for the alarm (we're using Alarm 0)
+    hw_set_bits(&timer_hw->inte, 1u << ALARM_NUM) ;
+    // Associate an interrupt handler with the ALARM_IRQ
+    irq_set_exclusive_handler(ALARM_IRQ, alarm_irq) ;
+    // Enable the alarm interrupt
+    irq_set_enabled(ALARM_IRQ, true) ;
+    // Write the lower 32 bits of the target time to the alarm register, arming it.
+    timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
 
 
     ////////////////// KEYPAD INITS ///////////////////////
