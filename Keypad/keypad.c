@@ -116,6 +116,10 @@ fix15 current_amplitude_1 = 0 ;         // current amplitude (modified in ISR)
 #define SUSTAIN_TIME            10000
 #define BEEP_DURATION           6500
 #define BEEP_REPEAT_INTERVAL    50000
+#define CARDINAL_DURATION_1     9250
+#define CARDINAL_DURATION_2     1000
+#define CARDINAL_DURATION_3     5450
+#define CARDINAL_DURATION_4     3500
 
 // State machine variables
 volatile unsigned int STATE_0 = 0 ;
@@ -161,7 +165,7 @@ static void alarm_irq(void) {
     // Reset the alarm register
     timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
 
-    if (STATE == 0) {
+    if (STATE == 1) {
         // DDS phase and sine table lookup
         frequency = (int)(count_0 * count_0 * (0.000153) + 2000);
         // printf("\n %d", frequency);
@@ -195,8 +199,8 @@ static void alarm_irq(void) {
             // printf("\n after duration:%d", STATE);
         }
     }
-    else if (STATE == 1){
-                // DDS phase and sine table lookup
+    else if (STATE == 2){
+        // DDS phase and sine table lookup
         frequency = (int)(-260.0 * sin((-M_PI / BEEP_DURATION) * count_0) + 1740.0);
         // printf("\n %d", frequency);
         phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
@@ -230,6 +234,169 @@ static void alarm_irq(void) {
         }
     }
 
+    // State = 3, silence
+    else if (STATE == 3){
+        
+        current_amplitude_0 = 0;
+        // DDS phase and sine table lookup
+        frequency = (int)(0);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        // phase_accum_main_0 += phase_incr_main_0  ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;
+
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+        // Increment the counter
+        count_0 += 1 ;
+        
+        // State transition?
+        if (count_0 == BEEP_DURATION) {
+            STATE = -1 ;
+            count_0 = 0 ;
+            // printf("\n after duration:%d", STATE);
+        }
+    }
+
+    // State = 4, large linear 
+    else if (STATE == 4){
+        
+        
+        // DDS phase and sine table lookup
+        frequency = (int)(-0.354*count_0+5617);
+        // printf("\n %d", frequency);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        // phase_accum_main_0 += phase_incr_main_0  ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;
+
+        // Ramp up amplitude
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+        }
+        // Ramp down amplitude
+        else if (count_0 > CARDINAL_DURATION_1 - DECAY_TIME) {
+            current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+        }
+
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+        // Increment the counter
+        count_0 += 1 ;
+        
+        // State transition?
+        if (count_0 == CARDINAL_DURATION_1) {
+            STATE = -1 ;
+            count_0 = 0 ;
+        }
+    }
+    // State = 5, silence
+    else if (STATE == 5){
+        
+        current_amplitude_0 = 0;
+        // DDS phase and sine table lookup
+        frequency = (int)(0);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        // phase_accum_main_0 += phase_incr_main_0  ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;
+
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+        // Increment the counter
+        count_0 += 1 ;
+        
+        // State transition?
+        if (count_0 == CARDINAL_DURATION_2) {
+            STATE = -1 ;
+            count_0 = 0 ;
+            // printf("\n after duration:%d", STATE);
+        }
+    }
+    // state = 6, small linear
+    else if (STATE == 6){
+        
+        
+        // DDS phase and sine table lookup
+        frequency = (int)(-0.0796*count_0+2334);
+        // printf("\n %d", frequency);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        // phase_accum_main_0 += phase_incr_main_0  ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;
+
+        // Ramp up amplitude
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+        }
+        // Ramp down amplitude
+        else if (count_0 > CARDINAL_DURATION_3 - DECAY_TIME) {
+            current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+        }
+
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+        // Increment the counter
+        count_0 += 1 ;
+        
+        // State transition?
+        if (count_0 == CARDINAL_DURATION_3) {
+            STATE = -1 ;
+            count_0 = 0 ;
+        }
+    }
+    // state = 7, sin funciton
+    else if (STATE == 7){
+        
+        
+        // DDS phase and sine table lookup
+        frequency = (int)(-750 * sin((-M_PI / CARDINAL_DURATION_4) * count_0) + 2000);
+        // printf("\n %d", frequency);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        // phase_accum_main_0 += phase_incr_main_0  ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;
+
+        // Ramp up amplitude
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+        }
+        // Ramp down amplitude
+        else if (count_0 > CARDINAL_DURATION_4 - DECAY_TIME) {
+            current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+        }
+
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+        // Increment the counter
+        count_0 += 1 ;
+        
+        // State transition?
+        if (count_0 == CARDINAL_DURATION_4) {
+            STATE = -1 ;
+            count_0 = 0 ;
+        }
+    }
     // State transition?
     else {
         count_0 += 1 ;
@@ -294,6 +461,11 @@ typedef enum {
 static KeyState key_state = RESET;
 static int keycode = -1;
 static int possible = -1;
+static uint8_t record_buff[51] = {0};
+static uint8_t record_len = 0;
+// record flag = 0 : not recording; 
+// flag = 1: recording; flag= 2: play back
+static uint8_t recordflag = 0;
 
 // This thread runs on core 0
 static PT_THREAD (protothread_core_0(struct pt *pt))
@@ -325,18 +497,51 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
                     keycode = scan();
                     key_state = KEY_PRESSED;
                     // take an action
-                    if (possible == 1) 
-                        STATE = 0;
-                    else if (possible == 2)
-                        STATE = 1;
-                    current_amplitude_0 = 0;
-                    count_0 = 0;
-                }
+                    if (recordflag  == 0) {
+                        if (possible == 1) 
+                            STATE = 1;
+                        else if (possible == 2)
+                            STATE = 2;
+                        else if (possible == 3)
+                            STATE = 3;
+                        else if (possible == 4)
+                            STATE = 4;
+                        else if (possible == 5)
+                            STATE = 5;
+                        else if (possible == 6)
+                            STATE = 6;
+                        else if (possible == 7)
+                            STATE = 7;
+                        else if (possible == 11){
+                            STATE = 11;
+                            recordflag = 1;
+                        }
+                        current_amplitude_0 = 0;
+                        count_0 = 0;
+                    }
+                    else if(recordflag == 1 && possible != 11) {
+                        if (record_len <=49) {
+                            record_buff[record_len] = keycode;
+                            printf("keycode:%d\n", keycode);
+                            record_len += 1;
+                        }
+                        else if (record_len >= 50) {
+                            printf("record buffer full !!!!\n");
+                        }
+                    }
+                    else if (recordflag && possible == 11) {
+                        recordflag = 2;
+                        STATE = -1;
+                        current_amplitude_0 = 0;
+                        count_0 = 0;
+                        }
+                    }
                 else {
                     keycode = scan();
                     key_state = KEY_NOT_PRESSED;
                 }
                 break;
+
             case KEY_PRESSED:
                 if (keycode == possible) {
                     
@@ -370,6 +575,34 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
     // Indicate thread end
     PT_END(pt) ;
 }
+
+// pt_thread for recording
+static PT_THREAD (protothread_core_1(struct pt *pt))
+{
+    PT_BEGIN(pt) ;
+    while(1) {
+    printf("record flag: %u STATE:%d\n", recordflag, STATE);
+    if (recordflag == 2 && STATE == -1)
+    {
+        current_amplitude_0 = 0;
+        count_0 = 0;
+        STATE = record_buff[0];
+        for (int i = 0; i < record_len; ++i) {
+            record_buff[i] = record_buff[i + 1];
+        }
+        record_len = record_len - 1;
+        if (record_len == 0)
+        {
+            recordflag = 0;
+        }
+        
+    }
+    PT_YIELD_usec(30000) ;
+    }
+    // Indicate thread end
+    PT_END(pt) ;
+}
+    
 
 
 int main() {
@@ -418,7 +651,7 @@ int main() {
     // scaled to produce values between 0 and 4096 (for 12-bit DAC)
     int ii;
     for (ii = 0; ii < sine_table_size; ii++){
-         sin_table[ii] = float2fix15(2047*sin((float)ii*6.283/(float)sine_table_size));
+        sin_table[ii] = float2fix15(2047*sin((float)ii*6.283/(float)sine_table_size));
     }
 
     // Enable the interrupt for the alarm (we're using Alarm 0)
@@ -445,6 +678,7 @@ int main() {
 
     // Add core 0 threads
     pt_add_thread(protothread_core_0) ;
+    pt_add_thread(protothread_core_1) ;
 
     // Start scheduling core 0 threads
     pt_schedule_start ;
