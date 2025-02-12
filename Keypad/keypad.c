@@ -201,8 +201,8 @@ static void alarm_irq(void) {
     }
     else if (STATE == 2){
         // DDS phase and sine table lookup
-        frequency = (int)(-260.0 * sin((-M_PI / BEEP_DURATION) * count_0) + 1740.0);
-        // printf("\n %d", frequency);
+        // frequency = (int)(-260.0 * sin((-M_PI / BEEP_DURATION) * count_0) + 1740.0);
+        frequency = (int)(-0.000024615*(count_0*count_0)+0.16*count_0+1740);
         phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
         // phase_accum_main_0 += phase_incr_main_0  ;
         DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
@@ -366,7 +366,8 @@ static void alarm_irq(void) {
         
         
         // DDS phase and sine table lookup
-        frequency = (int)(-750 * sin((-M_PI / CARDINAL_DURATION_4) * count_0) + 2000);
+        // frequency = (int)(-750 * sin((-M_PI / CARDINAL_DURATION_4) * count_0) + 2000);
+        frequency = (int)(-0.000244898*(count_0)*(count_0)+0.85714*count_0+1500);
         // printf("\n %d", frequency);
         phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
         // phase_accum_main_0 += phase_incr_main_0  ;
@@ -653,6 +654,8 @@ int main() {
     for (ii = 0; ii < sine_table_size; ii++){
         sin_table[ii] = float2fix15(2047*sin((float)ii*6.283/(float)sine_table_size));
     }
+
+
 
     // Enable the interrupt for the alarm (we're using Alarm 0)
     hw_set_bits(&timer_hw->inte, 1u << ALARM_NUM) ;
