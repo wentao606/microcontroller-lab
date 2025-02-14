@@ -63,6 +63,12 @@ typedef signed int fix15 ;
 // the color of the boid
 char color = WHITE ;
 
+// row number
+static int row_num = 6;
+
+// bounciness
+static fix15 bounciness = 0.5;
+
 // Boid on core 0
 fix15 boid0_x ;
 fix15 boid0_y ;
@@ -75,22 +81,44 @@ fix15 boid1_y ;
 fix15 boid1_vx ;
 fix15 boid1_vy ;
 
+// Ball 
+fix15 ball_x;
+fix15 ball_y;
+fix15 ball_vx;
+fix15 ball_vy;
+
+// Number of pegs, Number of balls
+
+#define peg_num 1
+#define ball_num 1
+
+// Peg separations
+#define vertical_seperation 19
+#define horizontal_seperation 38
+
+
+typedef struct {
+    int x;
+    int y;
+} Coordinates;
+Coordinates peg_coordinate[16];
+Coordinates ball_coordinate[10];
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
 {
   // Start in center of screen
   *x = int2fix15(320) ;
-  *y = int2fix15(240) ;
+  *y = int2fix15(30) ;
   // Choose left or right
   if (direction) *vx = int2fix15(3) ;
   else *vx = int2fix15(-3) ;
   // Moving down
-  *vy = int2fix15(1) ;
+  *vy = int2fix15(0) ;
 }
 
 // Draw the boundaries
 void drawArena() {
-  drawVLine(100, 100, 280, WHITE) ;
+  drawVLine(100, 100, 280, BLUE) ;
   drawVLine(540, 100, 280, WHITE) ;
   drawHLine(100, 100, 440, WHITE) ;
   drawHLine(100, 380, 440, WHITE) ;
@@ -116,11 +144,84 @@ void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
     *vx = (-*vx) ;
     *x  = (*x + int2fix15(5)) ;
   } 
-
+  
   // Update position using velocity
   *x = *x + *vx ;
   *y = *y + *vy ;
 }
+
+void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
+{
+  
+  // Compute x and y distances between ball and peg
+  fix15 dx;
+  fix15 dy;
+  fix15 distance;
+  fix15 normal_x;
+  fix15 normal_y;
+  fix15 intermediate_term;
+
+  for (int j = 0; j < 16; j++)
+  {
+    
+    dx = (fix15)((* x) - int2fix15(peg_coordinate[j].x));
+    dy = (fix15)((* y) - int2fix15(peg_coordinate[j].y));
+
+    if (dx < 10 || dy < 10){
+      distance = (fix15)(sqrt(dx * dx + dy * dy));
+      
+      normal_x =  (fix15)(dx / distance);
+      normal_y =  (fix15)(dy / distance);
+
+      intermediate_term = (fix15)(int2fix15(-2) * (normal_x * (* vx) + normal_y * (* vy)));
+
+      if (intermediate_term > 0)
+      {
+        (* x)= (fix15)(peg_coordinate[j].x + (normal_x * (distance+1)));
+        (* y) = (fix15)(peg_coordinate[j].y + (normal_y * (distance+1)));
+
+        * vx = (fix15)(* vx + (normal_x * intermediate_term));
+        * vy = (fix15)(* vy + (normal_y * intermediate_term));
+        
+        * vx = (fix15)(bounciness * (* vx));
+        * vy = (fix15)(bounciness * (* vy));
+        
+      }
+    }
+
+    
+  }
+  fillCircle(100, 100, 5, RED);
+  (* vy) = (fix15)(* vy + float2fix15(0.75));
+  (* x) = (fix15)(* x + * vx);
+  (* y) = (fix15)((* y) + * vy);
+  printf("vy:%d, x:%d, y:%d", *vy, *x, *y);
+
+}
+
+
+
+void drawBoard(){
+  
+  for(int i = 0; i < row_num; i++){
+    for (int j = 0; j < i + 1; j++){
+      fillCircle(320-i*horizontal_seperation/2+j*horizontal_seperation, 100+i*vertical_seperation, 6, WHITE);
+      peg_coordinate[i].x = 320 - i*horizontal_seperation/2 + j*horizontal_seperation;
+      peg_coordinate[i].y = 100 + i*vertical_seperation;
+    }
+  }
+}
+
+// void drawBoard(){
+//   for (int i = 0; i < peg_num; i++)
+//   {
+//     fillCircle( 320, 30, 6, WHITE);
+//   }
+//   for (int i = 0; i < ball_num; i++)
+//   {
+//     fillCircle( 320, 10, 4, GREEN);
+//   }
+// }
 
 // ==================================================
 // === users serial input thread
@@ -169,14 +270,16 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     while(1) {
       // Measure time at start of thread
       begin_time = time_us_32() ;      
+      //
+      drawBoard();
+      //
       // erase boid
-      drawRect(fix2int15(boid0_x), fix2int15(boid0_y), 2, 2, BLACK);
+      fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 4, BLACK);
       // update boid's position and velocity
-      wallsAndEdges(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy) ;
+      ballPegCollision(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy);
       // draw the boid at its new position
-      drawRect(fix2int15(boid0_x), fix2int15(boid0_y), 2, 2, color); 
-      // draw the boundaries
-      drawArena() ;
+      fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 4, color); 
+      
       // delay in accordance with frame rate
       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
       // yield for necessary amount of time
@@ -202,13 +305,20 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
 
     while(1) {
       // Measure time at start of thread
-      begin_time = time_us_32() ;      
+      begin_time = time_us_32() ; 
+      
       // erase boid
       drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, BLACK);
       // update boid's position and velocity
       wallsAndEdges(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy) ;
       // draw the boid at its new position
       drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, color); 
+
+      //
+
+      //
+
+
       // delay in accordance with frame rate
       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
       // yield for necessary amount of time
