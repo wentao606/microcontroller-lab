@@ -57,6 +57,7 @@ unsigned int keycodes[12] = {   0x28, 0x11, 0x21, 0x41, 0x12,
                                 0x22, 0x42, 0x14, 0x24, 0x44,
                                 0x18, 0x48} ;
 unsigned int scancodes[4] = {   0x01, 0x02, 0x04, 0x08} ;
+
 unsigned int button = 0x70 ;
 
 
@@ -167,18 +168,20 @@ static void alarm_irq(void) {
 
     if (STATE == 1) {
         // DDS phase and sine table lookup
-        frequency = (int)(count_0 * count_0 * (0.000153) + 2000);
-        // printf("\n %d", frequency);
-        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
-        // phase_accum_main_0 += phase_incr_main_0  ;
-        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
-            sin_table[phase_accum_main_0>>24])) + 2048 ;
+        // frequency = (int)(count_0 * count_0 * (0.000153) + 2000);
 
-        // Ramp up amplitude
+        frequency = (int)(count_0 * count_0 * (0.000183) + 2000);
+        // printf("\n %d", frequency);
+
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;// Add 2048 to center it from range (-2048,2048) to (0,4096)
+
+        // Ramp up amplitude (ATTACK_TIME = 250)
         if (count_0 < ATTACK_TIME) {
             current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
         }
-        // Ramp down amplitude
+        // Ramp down amplitude (DECAY_TIME = 250)
         else if (count_0 > BEEP_DURATION - DECAY_TIME) {
             current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
         }
@@ -255,7 +258,7 @@ static void alarm_irq(void) {
         count_0 += 1 ;
         
         // State transition?
-        if (count_0 == BEEP_DURATION) {
+        if (count_0 == B0EEP_DURATION) {
             STATE = -1 ;
             count_0 = 0 ;
             // printf("\n after duration:%d", STATE);
@@ -520,6 +523,8 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
                         current_amplitude_0 = 0;
                         count_0 = 0;
                     }
+                    // Store the pressing buttons after pressing play \
+                    + for the first time
                     else if(recordflag == 1 && possible != 11) {
                         if (record_len <=49) {
                             record_buff[record_len] = keycode;
@@ -530,6 +535,8 @@ static PT_THREAD (protothread_core_0(struct pt *pt))
                             printf("record buffer full !!!!\n");
                         }
                     }
+                    // Assign the recordflag value to the play mode when \
+                    + pressing play button for the second time
                     else if (recordflag && possible == 11) {
                         recordflag = 2;
                         STATE = -1;
