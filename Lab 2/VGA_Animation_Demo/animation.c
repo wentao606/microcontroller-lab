@@ -96,6 +96,7 @@ char color = WHITE ;
 
 // row number
 static int row_num = 1;
+static int data_chan;
 
 // bounciness
 static fix15 bounciness = float2fix15(0.5);
@@ -166,95 +167,6 @@ void drawArena() {
   drawHLine(100, 380, 440, WHITE) ;
 }
 
-//Detect wallstrikes, update velocity and position
-// void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
-// {
-//   // Reverse direction if we've hit a wall
-//   if (hitTop(*y)) {
-//     *vy = (-*vy) ;
-//     *y  = (*y + int2fix15(5)) ;
-//   }
-//   if (hitBottom(*y)) {
-//     *vy = (-*vy) ;
-//     *y  = (*y - int2fix15(5)) ;
-//   } 
-//   if (hitRight(*x)) {
-//     *vx = (-*vx) ;
-//     *x  = (*x - int2fix15(5)) ;
-//   }
-//   if (hitLeft(*x)) {
-//     *vx = (-*vx) ;
-//     *x  = (*x + int2fix15(5)) ;
-//   } 
-  
-//   // Update position using velocity
-//   *x = *x + *vx ;
-//   *y = *y + *vy ;
-
-
-// }
-void sound_start(void)
-{
-    // Build sine table and DAC data table
-    int i ;
-    for (i=0; i<(sine_table_size); i++){
-        raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
-        DAC_data[i] = DAC_config_chan_A | (raw_sin[i] & 0x0fff) ;
-    }
-  
-    // Select DMA channels
-    int data_chan = dma_claim_unused_channel(true);;
-    int ctrl_chan = dma_claim_unused_channel(true);;
-  
-  
-    // Setup the control channel
-    dma_channel_config c = dma_channel_get_default_config(ctrl_chan);   // default configs
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);             // 32-bit txfers
-    channel_config_set_read_increment(&c, false);                       // no read incrementing
-    channel_config_set_write_increment(&c, false);                      // no write incrementing
-    channel_config_set_chain_to(&c, data_chan);                         // chain to data channel
-  
-    dma_channel_configure(
-        ctrl_chan,                          // Channel to be configured
-        &c,                                 // The configuration we just created
-        &dma_hw->ch[data_chan].read_addr,   // Write address (data channel read address)
-        &address_pointer_dma,                   // Read address (POINTER TO AN ADDRESS)
-        1,                                  // Number of transfers
-        false                               // Don't start immediately
-    );
-
-    
-  
-    // Setup the data channel
-    dma_channel_config c2 = dma_channel_get_default_config(data_chan);  // Default configs
-    channel_config_set_transfer_data_size(&c2, DMA_SIZE_16);            // 16-bit txfers
-    channel_config_set_read_increment(&c2, true);                       // yes read incrementing
-    channel_config_set_write_increment(&c2, false);                     // no write incrementing
-    // (X/Y)*sys_clk, where X is the first 16 bytes and Y is the second
-    // sys_clk is 125 MHz unless changed in code. Configured to ~44 kHz
-    dma_timer_set_fraction(0, 0x0017, 0xffff) ;
-    // 0x3b means timer0 (see SDK manual)
-    channel_config_set_dreq(&c2, 0x3b);                                 // DREQ paced by timer 0
-    // chain to the controller DMA channel
-    // channel_config_set_chain_to(&c2, ctrl_chan);                        // Chain to control channel
-  
-  
-    dma_channel_configure(
-        data_chan,                  // Channel to be configured
-        &c2,                        // The configuration we just created
-        &spi_get_hw(SPI_PORT)->dr,  // write address (SPI data register)
-        DAC_data,                   // The initial read address
-        sine_table_size,            // Number of transfers
-        false                       // Don't start immediately.
-    );
-  
-  
-    // start the control channel
-    dma_start_channel_mask(1u << ctrl_chan) ;
-    
-}
-
-
 
 void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 {
@@ -305,7 +217,7 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 
     if ((dx < int2fix15(10) && dx > int2fix15(-10)) && (dy > int2fix15(-10) && dy < int2fix15(10) )){
       
-      sound_start();
+      dma_start_channel_mask(1u << data_chan);
 
       distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
       
@@ -343,17 +255,15 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
     * y = * y + * vy;
   // printf("vy:%f, x:%f, y:%f\n", fix2float15(*vy), fix2float15(*x), fix2float15(*y));
     if hitBottom(*y){
-    *x = int2fix15(320) ;
-    *y = int2fix15(30) ;
-    // Choose left or right
-    *vx = float2fix15(-0.05) ;
-    // Moving down
-    *vy = int2fix15(1) ;
-  }
+      *x = int2fix15(320) ;
+      *y = int2fix15(30) ;
+      // Choose left or right
+      *vx = float2fix15(-0.05) ;
+      // Moving down
+      *vy = int2fix15(1) ;
+    }
 
 }
-
-
 
 void drawBoard(){
   
@@ -366,16 +276,6 @@ void drawBoard(){
   }
 }
 
-// void drawBoard(){
-//   for (int i = 0; i < peg_num; i++)
-//   {
-//     fillCircle( 320, 30, 6, WHITE);
-//   }
-//   for (int i = 0; i < ball_num; i++)
-//   {
-//     fillCircle( 320, 10, 4, GREEN);
-//   }
-// }
 
 // ==================================================
 // === users serial input thread
@@ -513,63 +413,36 @@ int main(){
   gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
   gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
 
-  // // Build sine table and DAC data table
-  // int i ;
-  // for (i=0; i<(sine_table_size); i++){
-  //     raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
-  //     DAC_data[i] = DAC_config_chan_A | (raw_sin[i] & 0x0fff) ;
-  // }
+  // Build sine table and DAC data table
+  int i ;
+  for (i=0; i<(sine_table_size); i++){
+      raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
+      DAC_data[i] = DAC_config_chan_A | (raw_sin[i] & 0x0fff) ;
+  }
 
-  // // Select DMA channels
-  // int data_chan = dma_claim_unused_channel(true);;
-  // int ctrl_chan = dma_claim_unused_channel(true);;
+  // Select DMA channels
+  data_chan = dma_claim_unused_channel(true);
 
+  // Setup the data channel
+  dma_channel_config c2 = dma_channel_get_default_config(data_chan);  // Default configs
+  channel_config_set_transfer_data_size(&c2, DMA_SIZE_16);            // 16-bit txfers
+  channel_config_set_read_increment(&c2, true);                       // yes read incrementing
+  channel_config_set_write_increment(&c2, false);                     // no write incrementing
+  // (X/Y)*sys_clk, where X is the first 16 bytes and Y is the second
+  // sys_clk is 125 MHz unless changed in code. Configured to ~44 kHz
+  dma_timer_set_fraction(0, 0x0017, 0xffff) ;
+  // 0x3b means timer0 (see SDK manual)
+  channel_config_set_dreq(&c2, 0x3b);                                 // DREQ paced by timer 0
 
-  // // Setup the control channel
-  // dma_channel_config c = dma_channel_get_default_config(ctrl_chan);   // default configs
-  // channel_config_set_transfer_data_size(&c, DMA_SIZE_32);             // 32-bit txfers
-  // channel_config_set_read_increment(&c, false);                       // no read incrementing
-  // channel_config_set_write_increment(&c, false);                      // no write incrementing
-  // channel_config_set_chain_to(&c, data_chan);                         // chain to data channel
+  dma_channel_configure(
+      data_chan,                  // Channel to be configured
+      &c2,                        // The configuration we just created
+      &spi_get_hw(SPI_PORT)->dr,  // write address (SPI data register)
+      DAC_data,                   // The initial read address
+      sine_table_size,            // Number of transfers
+      false                       // Don't start immediately.
+  );
 
-  // dma_channel_configure(
-  //     ctrl_chan,                          // Channel to be configured
-  //     &c,                                 // The configuration we just created
-  //     &dma_hw->ch[data_chan].read_addr,   // Write address (data channel read address)
-  //     &address_pointer_dma,                   // Read address (POINTER TO AN ADDRESS)
-  //     1,                                  // Number of transfers
-  //     false                               // Don't start immediately
-  // );
-
-  // // Setup the data channel
-  // dma_channel_config c2 = dma_channel_get_default_config(data_chan);  // Default configs
-  // channel_config_set_transfer_data_size(&c2, DMA_SIZE_16);            // 16-bit txfers
-  // channel_config_set_read_increment(&c2, true);                       // yes read incrementing
-  // channel_config_set_write_increment(&c2, false);                     // no write incrementing
-  // // (X/Y)*sys_clk, where X is the first 16 bytes and Y is the second
-  // // sys_clk is 125 MHz unless changed in code. Configured to ~44 kHz
-  // dma_timer_set_fraction(0, 0x0017, 0xffff) ;
-  // // 0x3b means timer0 (see SDK manual)
-  // channel_config_set_dreq(&c2, 0x3b);                                 // DREQ paced by timer 0
-  // // chain to the controller DMA channel
-  // channel_config_set_chain_to(&c2, ctrl_chan);                        // Chain to control channel
-
-
-  // dma_channel_configure(
-  //     data_chan,                  // Channel to be configured
-  //     &c2,                        // The configuration we just created
-  //     &spi_get_hw(SPI_PORT)->dr,  // write address (SPI data register)
-  //     DAC_data,                   // The initial read address
-  //     sine_table_size,            // Number of transfers
-  //     false                       // Don't start immediately.
-  // );
-
-
-  // start the control channel
-  // dma_start_channel_mask(1u << ctrl_chan) ;
-  // dma_start_channel_mask(1u << ctrl_chan) ;
-  //   dma_channel_abort(data_chan);
-  //   dma_channel_abort(ctrl_chan);
 
   // Exit main.
   // No code executing!!
