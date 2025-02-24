@@ -39,6 +39,37 @@
 #include "hardware/pll.h"
 // Include protothreads
 #include "pt_cornell_rp2040_v1_3.h"
+//
+#include "hardware/dma.h"
+#include "hardware/spi.h"
+
+// Number of samples per period in sine table
+#define sine_table_size 256
+
+// Sine table
+int raw_sin[sine_table_size] ;
+
+// Table of values to be sent to DAC
+unsigned short DAC_data[sine_table_size] ;
+
+// Pointer to the address of the DAC data table
+unsigned short * address_pointer_dma = &DAC_data[0] ;
+
+// A-channel, 1x, active
+#define DAC_config_chan_A 0b0011000000000000
+
+//SPI configurations
+#define PIN_MISO 4
+#define PIN_CS   5
+#define PIN_SCK  6
+#define PIN_MOSI 7
+#define SPI_PORT spi0
+
+// Number of DMA transfers per event
+const uint32_t transfer_count = sine_table_size ;
+
+
+//DMA
 
 // === the fixed point macros ========================================
 typedef signed int fix15 ;
@@ -50,7 +81,7 @@ typedef signed int fix15 ;
 #define fix2int15(a) ((int)(a >> 15))
 #define char2fix15(a) (fix15)(((fix15)(a)) << 15)
 #define divfix(a,b) (fix15)(div_s64s64( (((signed long long)(a)) << 15), ((signed long long)(b))))
-
+#define sqrtfix(a) float2fix15(sqrt(fix2float15(a)))
 // Wall detection
 #define hitBottom(b) (b>int2fix15(380))
 #define hitTop(b) (b<int2fix15(100))
@@ -64,10 +95,13 @@ typedef signed int fix15 ;
 char color = WHITE ;
 
 // row number
-static int row_num = 6;
+static int row_num = 1;
 
 // bounciness
-static fix15 bounciness = 0.5;
+static fix15 bounciness = float2fix15(0.5);
+
+// gravity
+static fix15 gravity= float2fix15(0.75);
 
 // Boid on core 0
 fix15 boid0_x ;
@@ -86,6 +120,14 @@ fix15 ball_x;
 fix15 ball_y;
 fix15 ball_vx;
 fix15 ball_vy;
+
+// Compute x and y distances between ball and peg
+fix15 dx;
+fix15 dy;
+fix15 distance;
+fix15 normal_x;
+fix15 normal_y;
+fix15 intermediate_term;
 
 // Number of pegs, Number of balls
 
@@ -110,10 +152,10 @@ void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
   *x = int2fix15(320) ;
   *y = int2fix15(30) ;
   // Choose left or right
-  if (direction) *vx = int2fix15(3) ;
-  else *vx = int2fix15(-3) ;
+  if (direction) *vx = float2fix15(0.05) ;
+  else *vx = float2fix15(-0.05) ;
   // Moving down
-  *vy = int2fix15(0) ;
+  *vy = int2fix15(1) ;
 }
 
 // Draw the boundaries
@@ -124,78 +166,190 @@ void drawArena() {
   drawHLine(100, 380, 440, WHITE) ;
 }
 
-// Detect wallstrikes, update velocity and position
-void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
-{
-  // Reverse direction if we've hit a wall
-  if (hitTop(*y)) {
-    *vy = (-*vy) ;
-    *y  = (*y + int2fix15(5)) ;
-  }
-  if (hitBottom(*y)) {
-    *vy = (-*vy) ;
-    *y  = (*y - int2fix15(5)) ;
-  } 
-  if (hitRight(*x)) {
-    *vx = (-*vx) ;
-    *x  = (*x - int2fix15(5)) ;
-  }
-  if (hitLeft(*x)) {
-    *vx = (-*vx) ;
-    *x  = (*x + int2fix15(5)) ;
-  } 
+//Detect wallstrikes, update velocity and position
+// void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
+// {
+//   // Reverse direction if we've hit a wall
+//   if (hitTop(*y)) {
+//     *vy = (-*vy) ;
+//     *y  = (*y + int2fix15(5)) ;
+//   }
+//   if (hitBottom(*y)) {
+//     *vy = (-*vy) ;
+//     *y  = (*y - int2fix15(5)) ;
+//   } 
+//   if (hitRight(*x)) {
+//     *vx = (-*vx) ;
+//     *x  = (*x - int2fix15(5)) ;
+//   }
+//   if (hitLeft(*x)) {
+//     *vx = (-*vx) ;
+//     *x  = (*x + int2fix15(5)) ;
+//   } 
   
-  // Update position using velocity
-  *x = *x + *vx ;
-  *y = *y + *vy ;
+//   // Update position using velocity
+//   *x = *x + *vx ;
+//   *y = *y + *vy ;
+
+
+// }
+void sound_start(void)
+{
+    // Build sine table and DAC data table
+    int i ;
+    for (i=0; i<(sine_table_size); i++){
+        raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
+        DAC_data[i] = DAC_config_chan_A | (raw_sin[i] & 0x0fff) ;
+    }
+  
+    // Select DMA channels
+    int data_chan = dma_claim_unused_channel(true);;
+    int ctrl_chan = dma_claim_unused_channel(true);;
+  
+  
+    // Setup the control channel
+    dma_channel_config c = dma_channel_get_default_config(ctrl_chan);   // default configs
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);             // 32-bit txfers
+    channel_config_set_read_increment(&c, false);                       // no read incrementing
+    channel_config_set_write_increment(&c, false);                      // no write incrementing
+    channel_config_set_chain_to(&c, data_chan);                         // chain to data channel
+  
+    dma_channel_configure(
+        ctrl_chan,                          // Channel to be configured
+        &c,                                 // The configuration we just created
+        &dma_hw->ch[data_chan].read_addr,   // Write address (data channel read address)
+        &address_pointer_dma,                   // Read address (POINTER TO AN ADDRESS)
+        1,                                  // Number of transfers
+        false                               // Don't start immediately
+    );
+
+    
+  
+    // Setup the data channel
+    dma_channel_config c2 = dma_channel_get_default_config(data_chan);  // Default configs
+    channel_config_set_transfer_data_size(&c2, DMA_SIZE_16);            // 16-bit txfers
+    channel_config_set_read_increment(&c2, true);                       // yes read incrementing
+    channel_config_set_write_increment(&c2, false);                     // no write incrementing
+    // (X/Y)*sys_clk, where X is the first 16 bytes and Y is the second
+    // sys_clk is 125 MHz unless changed in code. Configured to ~44 kHz
+    dma_timer_set_fraction(0, 0x0017, 0xffff) ;
+    // 0x3b means timer0 (see SDK manual)
+    channel_config_set_dreq(&c2, 0x3b);                                 // DREQ paced by timer 0
+    // chain to the controller DMA channel
+    // channel_config_set_chain_to(&c2, ctrl_chan);                        // Chain to control channel
+  
+  
+    dma_channel_configure(
+        data_chan,                  // Channel to be configured
+        &c2,                        // The configuration we just created
+        &spi_get_hw(SPI_PORT)->dr,  // write address (SPI data register)
+        DAC_data,                   // The initial read address
+        sine_table_size,            // Number of transfers
+        false                       // Don't start immediately.
+    );
+  
+  
+    // start the control channel
+    dma_start_channel_mask(1u << ctrl_chan) ;
+    
 }
+
+
 
 void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 {
   
-  // Compute x and y distances between ball and peg
-  fix15 dx;
-  fix15 dy;
-  fix15 distance;
-  fix15 normal_x;
-  fix15 normal_y;
-  fix15 intermediate_term;
 
-  for (int j = 0; j < 16; j++)
-  {
+
+  // for (int j = 0; j < 16; j++)
+  // {
     
-    dx = (fix15)((* x) - int2fix15(peg_coordinate[j].x));
-    dy = (fix15)((* y) - int2fix15(peg_coordinate[j].y));
+    // dx = (fix15)((* x) - int2fix15(peg_coordinate[j].x));
+    // dy = (fix15)((* y) - int2fix15(peg_coordinate[j].y));
 
-    if (dx < 10 || dy < 10){
-      distance = (fix15)(sqrt(dx * dx + dy * dy));
+    // if (dx < int2fix15(10) || dy < int2fix15(10) || dx > int2fix15(-10) || dy > int2fix15(-10) ){
+
+    //   distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
       
-      normal_x =  (fix15)(dx / distance);
-      normal_y =  (fix15)(dy / distance);
+      
+    //   normal_x =  divfix(dx, distance);//fix15 division
+    //   normal_y =  divfix(dy, distance);//fix15 division
 
-      intermediate_term = (fix15)(int2fix15(-2) * (normal_x * (* vx) + normal_y * (* vy)));
+    //   intermediate_term = multfix15(int2fix15(-2), multfix15(normal_x, *vx) + multfix15(normal_y, *vy));
+    //   // intermediate_term = (fix15)(int2fix15(-2) * (normal_x * (* vx) + normal_y * (* vy)));
 
-      if (intermediate_term > 0)
+    //   if (intermediate_term > 0)
+    //   {
+    //     * x= int2fix15(peg_coordinate[j].x) + multfix15(normal_x, distance+int2fix15(1));
+    //     * y= int2fix15(peg_coordinate[j].y) + multfix15(normal_y, distance+int2fix15(1));
+        
+
+    //     * vx = * vx + multfix15(normal_x, intermediate_term);
+    //     * vy = * vy + multfix15(normal_y, intermediate_term);
+        
+    //     * vx = multfix15(bounciness, *vx);
+    //     * vy = multfix15(bounciness, *vy);
+    //   }
+    // }
+
+    // // Apply gravity
+    // * vy = gravity +  * vy;
+    
+    // Use ball's updated velocity to update its position
+    // * x = * x + * vx;
+    // * y = * y + * vy;
+  // }
+
+    dx = (fix15)((* x) - int2fix15(peg_coordinate[0].x));
+    dy = (fix15)((* y) - int2fix15(peg_coordinate[0].y));
+
+    if ((dx < int2fix15(10) && dx > int2fix15(-10)) && (dy > int2fix15(-10) && dy < int2fix15(10) )){
+      
+      sound_start();
+
+      distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
+      
+      
+      normal_x =  divfix(dx, distance);//fix15 division
+      normal_y =  divfix(dy, distance);//fix15 division
+
+      intermediate_term = multfix15(int2fix15(-2), multfix15(normal_x, *vx) + multfix15(normal_y, *vy));
+      // intermediate_term = (fix15)(int2fix15(-2) * (normal_x * (* vx) + normal_y * (* vy)));
+      printf("intermediate: %f\n", fix2float15(intermediate_term));
+
+      if (intermediate_term > int2fix15(0))
       {
-        (* x)= (fix15)(peg_coordinate[j].x + (normal_x * (distance+1)));
-        (* y) = (fix15)(peg_coordinate[j].y + (normal_y * (distance+1)));
+        * x= int2fix15(peg_coordinate[0].x) + multfix15(normal_x, distance+int2fix15(1));
+        * y= int2fix15(peg_coordinate[0].y) + multfix15(normal_y, distance+int2fix15(1));
+        
 
-        * vx = (fix15)(* vx + (normal_x * intermediate_term));
-        * vy = (fix15)(* vy + (normal_y * intermediate_term));
+        * vx = * vx + multfix15(normal_x, intermediate_term);
+        * vy = * vy + multfix15(normal_y, intermediate_term);
         
-        * vx = (fix15)(bounciness * (* vx));
-        * vy = (fix15)(bounciness * (* vy));
-        
+        * vx = multfix15(bounciness, *vx);
+        * vy = multfix15(bounciness, *vy);
       }
     }
-
-    
+    // if (hitLeft(100) || hitRight(500)){
+    //   * vx = - * vx;
+    // }
+    // if hitTop(10){
+    //   * vy = - * vy;
+    // }
+    // Apply gravity
+    * vy = gravity +  * vy;
+    // Use ball's updated velocity to update its position
+    * x = * x + * vx;
+    * y = * y + * vy;
+  // printf("vy:%f, x:%f, y:%f\n", fix2float15(*vy), fix2float15(*x), fix2float15(*y));
+    if hitBottom(*y){
+    *x = int2fix15(320) ;
+    *y = int2fix15(30) ;
+    // Choose left or right
+    *vx = float2fix15(-0.05) ;
+    // Moving down
+    *vy = int2fix15(1) ;
   }
-  fillCircle(100, 100, 5, RED);
-  (* vy) = (fix15)(* vy + float2fix15(0.75));
-  (* x) = (fix15)(* x + * vx);
-  (* y) = (fix15)((* y) + * vy);
-  printf("vy:%d, x:%d, y:%d", *vy, *x, *y);
 
 }
 
@@ -205,9 +359,9 @@ void drawBoard(){
   
   for(int i = 0; i < row_num; i++){
     for (int j = 0; j < i + 1; j++){
-      fillCircle(320-i*horizontal_seperation/2+j*horizontal_seperation, 100+i*vertical_seperation, 6, WHITE);
+      fillCircle(320-i*horizontal_seperation/2+j*horizontal_seperation, 200+i*vertical_seperation, 6, WHITE);
       peg_coordinate[i].x = 320 - i*horizontal_seperation/2 + j*horizontal_seperation;
-      peg_coordinate[i].y = 100 + i*vertical_seperation;
+      peg_coordinate[i].y = 200 + i*vertical_seperation;
     }
   }
 }
@@ -290,54 +444,54 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 } // animation thread
 
 
-// Animation on core 1
-static PT_THREAD (protothread_anim1(struct pt *pt))
-{
-    // Mark beginning of thread
-    PT_BEGIN(pt);
+// // Animation on core 1
+// static PT_THREAD (protothread_anim1(struct pt *pt))
+// {
+//     // Mark beginning of thread
+//     PT_BEGIN(pt);
 
-    // Variables for maintaining frame rate
-    static int begin_time ;
-    static int spare_time ;
+//     // Variables for maintaining frame rate
+//     static int begin_time ;
+//     static int spare_time ;
 
-    // Spawn a boid
-    spawnBoid(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy, 1);
+//     // Spawn a boid
+//     spawnBoid(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy, 1);
 
-    while(1) {
-      // Measure time at start of thread
-      begin_time = time_us_32() ; 
+//     while(1) {
+//       // Measure time at start of thread
+//       begin_time = time_us_32() ; 
       
-      // erase boid
-      drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, BLACK);
-      // update boid's position and velocity
-      wallsAndEdges(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy) ;
-      // draw the boid at its new position
-      drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, color); 
+//       // erase boid
+//       drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, BLACK);
+//       // update boid's position and velocity
+//       wallsAndEdges(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy) ;
+//       // draw the boid at its new position
+//       drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, color); 
 
-      //
+      
 
-      //
+//       //
 
 
-      // delay in accordance with frame rate
-      spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
-      // yield for necessary amount of time
-      PT_YIELD_usec(spare_time) ;
-     // NEVER exit while
-    } // END WHILE(1)
-  PT_END(pt);
-} // animation thread
+//       // delay in accordance with frame rate
+//       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
+//       // yield for necessary amount of time
+//       PT_YIELD_usec(spare_time) ;
+//      // NEVER exit while
+//     } // END WHILE(1)
+//   PT_END(pt);
+// } // animation thread
 
-// ========================================
-// === core 1 main -- started in main below
-// ========================================
-void core1_main(){
-  // Add animation thread
-  pt_add_thread(protothread_anim1);
-  // Start the scheduler
-  pt_schedule_start ;
+// // ========================================
+// // === core 1 main -- started in main below
+// // ========================================
+// void core1_main(){
+//   // Add animation thread
+//   pt_add_thread(protothread_anim1);
+//   // Start the scheduler
+//   pt_schedule_start ;
 
-}
+// }
 
 // ========================================
 // === main
@@ -347,12 +501,87 @@ int main(){
   // initialize stio
   stdio_init_all() ;
 
+  // Initialize SPI channel (channel, baud rate set to 20MHz)
+  spi_init(SPI_PORT, 20000000) ;
+
+  // Format SPI channel (channel, data bits per transfer, polarity, phase, order)
+  spi_set_format(SPI_PORT, 16, 0, 0, 0);
+
+  // Map SPI signals to GPIO ports, acts like framed SPI with this CS mapping
+  gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
+  gpio_set_function(PIN_CS, GPIO_FUNC_SPI) ;
+  gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
+  gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
+
+  // // Build sine table and DAC data table
+  // int i ;
+  // for (i=0; i<(sine_table_size); i++){
+  //     raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
+  //     DAC_data[i] = DAC_config_chan_A | (raw_sin[i] & 0x0fff) ;
+  // }
+
+  // // Select DMA channels
+  // int data_chan = dma_claim_unused_channel(true);;
+  // int ctrl_chan = dma_claim_unused_channel(true);;
+
+
+  // // Setup the control channel
+  // dma_channel_config c = dma_channel_get_default_config(ctrl_chan);   // default configs
+  // channel_config_set_transfer_data_size(&c, DMA_SIZE_32);             // 32-bit txfers
+  // channel_config_set_read_increment(&c, false);                       // no read incrementing
+  // channel_config_set_write_increment(&c, false);                      // no write incrementing
+  // channel_config_set_chain_to(&c, data_chan);                         // chain to data channel
+
+  // dma_channel_configure(
+  //     ctrl_chan,                          // Channel to be configured
+  //     &c,                                 // The configuration we just created
+  //     &dma_hw->ch[data_chan].read_addr,   // Write address (data channel read address)
+  //     &address_pointer_dma,                   // Read address (POINTER TO AN ADDRESS)
+  //     1,                                  // Number of transfers
+  //     false                               // Don't start immediately
+  // );
+
+  // // Setup the data channel
+  // dma_channel_config c2 = dma_channel_get_default_config(data_chan);  // Default configs
+  // channel_config_set_transfer_data_size(&c2, DMA_SIZE_16);            // 16-bit txfers
+  // channel_config_set_read_increment(&c2, true);                       // yes read incrementing
+  // channel_config_set_write_increment(&c2, false);                     // no write incrementing
+  // // (X/Y)*sys_clk, where X is the first 16 bytes and Y is the second
+  // // sys_clk is 125 MHz unless changed in code. Configured to ~44 kHz
+  // dma_timer_set_fraction(0, 0x0017, 0xffff) ;
+  // // 0x3b means timer0 (see SDK manual)
+  // channel_config_set_dreq(&c2, 0x3b);                                 // DREQ paced by timer 0
+  // // chain to the controller DMA channel
+  // channel_config_set_chain_to(&c2, ctrl_chan);                        // Chain to control channel
+
+
+  // dma_channel_configure(
+  //     data_chan,                  // Channel to be configured
+  //     &c2,                        // The configuration we just created
+  //     &spi_get_hw(SPI_PORT)->dr,  // write address (SPI data register)
+  //     DAC_data,                   // The initial read address
+  //     sine_table_size,            // Number of transfers
+  //     false                       // Don't start immediately.
+  // );
+
+
+  // start the control channel
+  // dma_start_channel_mask(1u << ctrl_chan) ;
+  // dma_start_channel_mask(1u << ctrl_chan) ;
+  //   dma_channel_abort(data_chan);
+  //   dma_channel_abort(ctrl_chan);
+
+  // Exit main.
+  // No code executing!!
+  
+
+  // DMA
   // initialize VGA
   initVGA() ;
-
-  // start core 1 
-  multicore_reset_core1();
-  multicore_launch_core1(&core1_main);
+  
+  // // start core 1 
+  // multicore_reset_core1();
+  // multicore_launch_core1(&core1_main);
 
   // add threads
   pt_add_thread(protothread_serial);
