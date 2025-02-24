@@ -83,7 +83,7 @@ typedef signed int fix15 ;
 #define divfix(a,b) (fix15)(div_s64s64( (((signed long long)(a)) << 15), ((signed long long)(b))))
 #define sqrtfix(a) float2fix15(sqrt(fix2float15(a)))
 // Wall detection
-#define hitBottom(b) (b>int2fix15(380))
+#define hitBottom(b) (b>int2fix15(500))
 #define hitTop(b) (b<int2fix15(100))
 #define hitLeft(a) (a<int2fix15(100))
 #define hitRight(a) (a>int2fix15(540))
@@ -95,8 +95,9 @@ typedef signed int fix15 ;
 char color = WHITE ;
 
 // row number
-static int row_num = 1;
-static int data_chan;
+static int row_num = 16;
+int data_chan;
+int last_peg = -1;
 
 // bounciness
 static fix15 bounciness = float2fix15(0.5);
@@ -143,18 +144,28 @@ fix15 intermediate_term;
 typedef struct {
     int x;
     int y;
-} Coordinates;
-Coordinates peg_coordinate[16];
-Coordinates ball_coordinate[10];
+} PegCoordinates;
+PegCoordinates peg_coordinate[136];
+
+typedef struct {
+  fix15 x;
+  fix15 y;
+  fix15 vx;
+  fix15 vy;
+} BoidCoordinates;
+BoidCoordinates ball_coordinate[10];
+
+
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
 {
+  fix15 rand_vx = float2fix15(rand()/RAND_MAX*0.1) ;
   // Start in center of screen
   *x = int2fix15(320) ;
   *y = int2fix15(30) ;
   // Choose left or right
-  if (direction) *vx = float2fix15(0.05) ;
-  else *vx = float2fix15(-0.05) ;
+  if (direction) *vx = rand_vx ;
+  else *vx = float2fix15(rand_vx) ;
   // Moving down
   *vy = int2fix15(1) ;
 }
@@ -170,55 +181,16 @@ void drawArena() {
 
 void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 {
-  
+  uint8_t hit = 0;
+  for (int j = 0; j < 136; j++)
+  {
+    dx = (fix15)((* x) - int2fix15(peg_coordinate[j].x));
+    dy = (fix15)((* y) - int2fix15(peg_coordinate[j].y));
 
-
-  // for (int j = 0; j < 16; j++)
-  // {
+    if ((dx < int2fix15(10) && dx > int2fix15(-10)) && (dy > int2fix15(-10) && dy < int2fix15(10) )) {
     
-    // dx = (fix15)((* x) - int2fix15(peg_coordinate[j].x));
-    // dy = (fix15)((* y) - int2fix15(peg_coordinate[j].y));
-
-    // if (dx < int2fix15(10) || dy < int2fix15(10) || dx > int2fix15(-10) || dy > int2fix15(-10) ){
-
-    //   distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
-      
-      
-    //   normal_x =  divfix(dx, distance);//fix15 division
-    //   normal_y =  divfix(dy, distance);//fix15 division
-
-    //   intermediate_term = multfix15(int2fix15(-2), multfix15(normal_x, *vx) + multfix15(normal_y, *vy));
-    //   // intermediate_term = (fix15)(int2fix15(-2) * (normal_x * (* vx) + normal_y * (* vy)));
-
-    //   if (intermediate_term > 0)
-    //   {
-    //     * x= int2fix15(peg_coordinate[j].x) + multfix15(normal_x, distance+int2fix15(1));
-    //     * y= int2fix15(peg_coordinate[j].y) + multfix15(normal_y, distance+int2fix15(1));
-        
-
-    //     * vx = * vx + multfix15(normal_x, intermediate_term);
-    //     * vy = * vy + multfix15(normal_y, intermediate_term);
-        
-    //     * vx = multfix15(bounciness, *vx);
-    //     * vy = multfix15(bounciness, *vy);
-    //   }
-    // }
-
-    // // Apply gravity
-    // * vy = gravity +  * vy;
-    
-    // Use ball's updated velocity to update its position
-    // * x = * x + * vx;
-    // * y = * y + * vy;
-  // }
-
-    dx = (fix15)((* x) - int2fix15(peg_coordinate[0].x));
-    dy = (fix15)((* y) - int2fix15(peg_coordinate[0].y));
-
-    if ((dx < int2fix15(10) && dx > int2fix15(-10)) && (dy > int2fix15(-10) && dy < int2fix15(10) )){
-      
+      hit = 1;
       dma_start_channel_mask(1u << data_chan);
-
       distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
       
       
@@ -227,54 +199,62 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 
       intermediate_term = multfix15(int2fix15(-2), multfix15(normal_x, *vx) + multfix15(normal_y, *vy));
       // intermediate_term = (fix15)(int2fix15(-2) * (normal_x * (* vx) + normal_y * (* vy)));
-      printf("intermediate: %f\n", fix2float15(intermediate_term));
 
       if (intermediate_term > int2fix15(0))
       {
-        * x= int2fix15(peg_coordinate[0].x) + multfix15(normal_x, distance+int2fix15(1));
-        * y= int2fix15(peg_coordinate[0].y) + multfix15(normal_y, distance+int2fix15(1));
+        * x= int2fix15(peg_coordinate[j].x) + multfix15(normal_x, distance+int2fix15(1));
+        * y= int2fix15(peg_coordinate[j].y) + multfix15(normal_y, distance+int2fix15(1));
         
 
         * vx = * vx + multfix15(normal_x, intermediate_term);
         * vy = * vy + multfix15(normal_y, intermediate_term);
+
+        if (last_peg != j) {
+          
+          * vx = multfix15(bounciness, *vx);
+          * vy = multfix15(bounciness, *vy);
+          last_peg = j;
+        }
         
-        * vx = multfix15(bounciness, *vx);
-        * vy = multfix15(bounciness, *vy);
       }
-    }
-    // if (hitLeft(100) || hitRight(500)){
-    //   * vx = - * vx;
-    // }
-    // if hitTop(10){
-    //   * vy = - * vy;
-    // }
-    // Apply gravity
-    * vy = gravity +  * vy;
-    // Use ball's updated velocity to update its position
-    * x = * x + * vx;
-    * y = * y + * vy;
-  // printf("vy:%f, x:%f, y:%f\n", fix2float15(*vy), fix2float15(*x), fix2float15(*y));
-    if hitBottom(*y){
-      *x = int2fix15(320) ;
-      *y = int2fix15(30) ;
-      // Choose left or right
-      *vx = float2fix15(-0.05) ;
-      // Moving down
-      *vy = int2fix15(1) ;
+      * vy = gravity +  * vy;
+      // Use ball's updated velocity to update its position
+      * x = * x + * vx;
+      * y = * y + * vy;
+      break;
     }
 
+    // if (hit)
+      // break;
+  }
+  if hitBottom(*y){
+    *x = int2fix15(320) ;
+    *y = int2fix15(30) ;
+    // Choose left or right
+    *vx = float2fix15(-0.05) ;
+    // Moving down
+    *vy = int2fix15(1) ;
+  }
+  // Apply gravity
+  * vy = gravity +  * vy;
+  // Use ball's updated velocity to update its position
+  * x = * x + * vx;
+  * y = * y + * vy;
 }
 
 void drawBoard(){
-  
+  int num = 0;
   for(int i = 0; i < row_num; i++){
     for (int j = 0; j < i + 1; j++){
-      fillCircle(320-i*horizontal_seperation/2+j*horizontal_seperation, 200+i*vertical_seperation, 6, WHITE);
-      peg_coordinate[i].x = 320 - i*horizontal_seperation/2 + j*horizontal_seperation;
-      peg_coordinate[i].y = 200 + i*vertical_seperation;
+      fillCircle(320-i*horizontal_seperation/2+j*horizontal_seperation, 100+i*vertical_seperation, 6, GREEN);
+      peg_coordinate[num].x = 320 - i*horizontal_seperation/2 + j*horizontal_seperation;
+      peg_coordinate[num].y = 100 + i*vertical_seperation;
+      num = num + 1;
     }
   }
 }
+
+
 
 
 // ==================================================
@@ -319,7 +299,12 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     static int spare_time ;
 
     // Spawn a boid
-    spawnBoid(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy, 0);
+    for (int i = 0; i < 10; i++){
+      fix15 rand_direc = float2fix15(rand() % 2) ;
+      spawnBoid(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy, rand_direc);
+    }
+    
+    
 
     while(1) {
       // Measure time at start of thread
@@ -422,6 +407,23 @@ int main(){
 
   // Select DMA channels
   data_chan = dma_claim_unused_channel(true);
+  int ctrl_chan = dma_claim_unused_channel(true);
+
+   // Setup the control channel
+   dma_channel_config c = dma_channel_get_default_config(ctrl_chan);   // default configs
+   channel_config_set_transfer_data_size(&c, DMA_SIZE_32);             // 32-bit txfers
+   channel_config_set_read_increment(&c, false);                       // no read incrementing
+   channel_config_set_write_increment(&c, false);                      // no write incrementing
+   //channel_config_set_chain_to(&c, data_chan);                         // chain to data channel
+
+  dma_channel_configure(
+       ctrl_chan,                          // Channel to be configured
+       &c,                                 // The configuration we just created
+       &dma_hw->ch[data_chan].read_addr,   // Write address (data channel read address)
+       &address_pointer_dma,                   // Read address (POINTER TO AN ADDRESS)
+       1,                                  // Number of transfers
+       false                               // Don't start immediately
+  );
 
   // Setup the data channel
   dma_channel_config c2 = dma_channel_get_default_config(data_chan);  // Default configs
@@ -433,6 +435,7 @@ int main(){
   dma_timer_set_fraction(0, 0x0017, 0xffff) ;
   // 0x3b means timer0 (see SDK manual)
   channel_config_set_dreq(&c2, 0x3b);                                 // DREQ paced by timer 0
+  channel_config_set_chain_to(&c2, ctrl_chan);                        // Chain to control channel
 
   dma_channel_configure(
       data_chan,                  // Channel to be configured
@@ -443,7 +446,7 @@ int main(){
       false                       // Don't start immediately.
   );
 
-
+  dma_start_channel_mask(1u << ctrl_chan) ;
   // Exit main.
   // No code executing!!
   

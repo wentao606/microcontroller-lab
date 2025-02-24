@@ -258,7 +258,7 @@ static void alarm_irq(void) {
         count_0 += 1 ;
         
         // State transition?
-        if (count_0 == B0EEP_DURATION) {
+        if (count_0 == BEEP_DURATION) {
             STATE = -1 ;
             count_0 = 0 ;
             // printf("\n after duration:%d", STATE);
