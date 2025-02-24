@@ -134,7 +134,8 @@ fix15 intermediate_term;
 // Number of pegs, Number of balls
 
 #define peg_num 1
-#define ball_num 1
+#define ball_num 15
+
 
 // Peg separations
 #define vertical_seperation 19
@@ -153,19 +154,19 @@ typedef struct {
   fix15 vx;
   fix15 vy;
 } BoidCoordinates;
-BoidCoordinates ball_coordinate[10];
+BoidCoordinates ball_coordinate[ball_num];
 
 
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
 {
-  fix15 rand_vx = float2fix15(rand()/RAND_MAX*0.1) ;
+  float rand_vx = (float)rand()/RAND_MAX*0.5 ;
   // Start in center of screen
   *x = int2fix15(320) ;
   *y = int2fix15(30) ;
   // Choose left or right
-  if (direction) *vx = rand_vx ;
-  else *vx = float2fix15(rand_vx) ;
+  if (direction) *vx =float2fix15(rand_vx) ;
+  else *vx = float2fix15(-rand_vx) ;
   // Moving down
   *vy = int2fix15(1) ;
 }
@@ -228,10 +229,15 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
       // break;
   }
   if hitBottom(*y){
+
+    int rand_direc = rand() % 2 ;
+    float rand_vx = (float)rand()/RAND_MAX*0.5 ;
+
     *x = int2fix15(320) ;
     *y = int2fix15(30) ;
-    // Choose left or right
-    *vx = float2fix15(-0.05) ;
+    if (rand_direc) *vx =float2fix15(rand_vx) ;
+    else *vx = float2fix15(-rand_vx) ;
+
     // Moving down
     *vy = int2fix15(1) ;
   }
@@ -299,8 +305,9 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     static int spare_time ;
 
     // Spawn a boid
-    for (int i = 0; i < 10; i++){
-      fix15 rand_direc = float2fix15(rand() % 2) ;
+    for (int i = 0; i < ball_num; i++){
+      int rand_direc = rand() % 2 ;
+      printf("direction: %d",rand_direc);
       spawnBoid(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy, rand_direc);
     }
     
@@ -313,11 +320,20 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       drawBoard();
       //
       // erase boid
-      fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 4, BLACK);
+      for (int i = 0; i < ball_num; i++){
+      fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+      ballPegCollision(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy);
+      fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
+      }
       // update boid's position and velocity
-      ballPegCollision(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy);
+      // ballPegCollision(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy);
+
+
       // draw the boid at its new position
-      fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 4, color); 
+      // for (int i = 0; i < 10; i++){
+      //   fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
+      //   }
+      // fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 4, color); 
       
       // delay in accordance with frame rate
       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
