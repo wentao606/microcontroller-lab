@@ -37,6 +37,7 @@
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
 #include "hardware/pll.h"
+#include "hardware/adc.h"
 // Include protothreads
 #include "pt_cornell_rp2040_v1_3.h"
 //
@@ -48,6 +49,7 @@
 
 // Sine table
 int raw_sin[sine_table_size] ;
+int row_width_table[17];
 
 // Table of values to be sent to DAC
 unsigned short DAC_data[sine_table_size] ;
@@ -64,6 +66,7 @@ unsigned short * address_pointer_dma = &DAC_data[0] ;
 #define PIN_SCK  6
 #define PIN_MOSI 7
 #define SPI_PORT spi0
+#define ADC_PIN 26
 
 // Number of DMA transfers per event
 const uint32_t transfer_count = sine_table_size ;
@@ -83,7 +86,7 @@ typedef signed int fix15 ;
 #define divfix(a,b) (fix15)(div_s64s64( (((signed long long)(a)) << 15), ((signed long long)(b))))
 #define sqrtfix(a) float2fix15(sqrt(fix2float15(a)))
 // Wall detection
-#define hitBottom(b) (b>int2fix15(500))
+#define hitBottom(b) (b>int2fix15(400))
 #define hitTop(b) (b<int2fix15(100))
 #define hitLeft(a) (a<int2fix15(100))
 #define hitRight(a) (a>int2fix15(540))
@@ -95,9 +98,41 @@ typedef signed int fix15 ;
 char color = WHITE ;
 
 // row number
+static int ball_num = 10;
+static int ball_num_set;
 static int row_num = 16;
 int data_chan;
 int last_peg = -1;
+
+static uint32_t start_time;
+static uint32_t boot_time;
+
+static int fallen_ball_num;
+static char text1[40];
+static char text2[40];
+static char text3[40];
+int bottom_ball[17];
+static int height1 = 0;
+static int height2 = 0;
+static int height3 = 0;
+static int height4 = 0;
+static int height5 = 0;
+static int height6 = 0;
+static int height7 = 0;
+static int height8 = 0;
+static int height9 = 0;
+static int height10 = 0;
+static int height11 = 0;
+static int height12 = 0;
+static int height13 = 0;
+static int height14 = 0;
+static int height15 = 0;
+static int height16 = 0;
+static int height17 = 0;
+
+
+uint16_t potentio_read;
+uint16_t potentio_read_prev;
 
 // bounciness
 static fix15 bounciness = float2fix15(0.5);
@@ -134,7 +169,9 @@ fix15 intermediate_term;
 // Number of pegs, Number of balls
 
 #define peg_num 1
-#define ball_num 15
+// #define ball_num 15
+#define max_ball_num 100
+#define min_ball_num 1
 
 
 // Peg separations
@@ -154,7 +191,7 @@ typedef struct {
   fix15 vx;
   fix15 vy;
 } BoidCoordinates;
-BoidCoordinates ball_coordinate[ball_num];
+BoidCoordinates ball_coordinate[max_ball_num];
 
 
 // Create a boid
@@ -229,17 +266,32 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
       // break;
   }
   if hitBottom(*y){
+    fallen_ball_num ++;
+    for (int i = 0; i < (row_num + 1); ++i) {
+      // if (*x >= int2fix15(i * 35) && *x < int2fix15(i * 35)) {
+      //   bottom_ball[i]++;
+      // }
+      float k = 1 / i;
+      fillRect(row_width_table[i], 430, 35, 100, YELLOW);
+    }
+    
+    if (ball_num_set < ball_num){
+      ball_num --;
+    }
+    else{
+      ball_num = ball_num_set;
+      int rand_direc = rand() % 2 ;
+      float rand_vx = (float)rand()/RAND_MAX*0.5 ;
 
-    int rand_direc = rand() % 2 ;
-    float rand_vx = (float)rand()/RAND_MAX*0.5 ;
+      *x = int2fix15(320) ;
+      *y = int2fix15(30) ;
+      if (rand_direc) *vx =float2fix15(rand_vx) ;
+      else *vx = float2fix15(-rand_vx) ;
 
-    *x = int2fix15(320) ;
-    *y = int2fix15(30) ;
-    if (rand_direc) *vx =float2fix15(rand_vx) ;
-    else *vx = float2fix15(-rand_vx) ;
-
-    // Moving down
-    *vy = int2fix15(1) ;
+      // Moving down
+      *vy = int2fix15(1) ;
+    }
+    
   }
   // Apply gravity
   * vy = gravity +  * vy;
@@ -260,7 +312,36 @@ void drawBoard(){
   }
 }
 
+void display(uint32_t boot_time){
+  sprintf(text1, "Number of fallen Balls: %d", fallen_ball_num);
+  sprintf(text2, "Number of Balls: %d", ball_num);
+  int boot_time_s = boot_time / 1000000;
+  sprintf(text3, "Time: %d", boot_time_s);
+  setCursor(10, 10);
+  fillRect(10, 10, 200, 100, BLACK);
+  setTextColor(WHITE);
+  setTextSize(1);
+  writeString(text1);
+  setCursor(10, 20);
+  fillRect(10, 20, 200, 100, BLACK);
+  writeString(text2);
+  setCursor(10, 30);
+  fillRect(10, 30, 200, 100, BLACK);
+  writeString(text3);
+}
 
+
+void change_ball_num(){
+  
+  adc_select_input  (0);
+  potentio_read = adc_read();
+
+  if (potentio_read != potentio_read_prev){
+    ball_num_set = (int)min_ball_num + (int)(potentio_read*(max_ball_num-min_ball_num)/4095);
+  }
+
+
+}
 
 
 // ==================================================
@@ -307,7 +388,6 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     // Spawn a boid
     for (int i = 0; i < ball_num; i++){
       int rand_direc = rand() % 2 ;
-      printf("direction: %d",rand_direc);
       spawnBoid(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy, rand_direc);
     }
     
@@ -319,21 +399,20 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       //
       drawBoard();
       //
+      change_ball_num();
       // erase boid
-      for (int i = 0; i < ball_num; i++){
-      fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
-      ballPegCollision(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy);
-      fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
+      for (int i = 0; i < max_ball_num; i++){
+        if (i < ball_num) {
+          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+          ballPegCollision(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy);
+          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
+        }
+        else {
+          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+        }
+        
       }
-      // update boid's position and velocity
-      // ballPegCollision(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy);
-
-
-      // draw the boid at its new position
-      // for (int i = 0; i < 10; i++){
-      //   fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
-      //   }
-      // fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 4, color); 
+      display(time_us_32() - start_time);
       
       // delay in accordance with frame rate
       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
@@ -401,6 +480,16 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 int main(){
   // initialize stio
   stdio_init_all() ;
+  start_time = time_us_32();
+  // initiate adc hardware and 
+  adc_init();
+  adc_gpio_init(ADC_PIN);
+
+  // while(1){
+  //   adc_select_input(0);
+  //   uint16_t potentio_read = adc_read();
+  //   int ball_num = min_ball_num + (int)(potentio_read*(max_ball_num-min_ball_num)/4095);
+  // }
 
   // Initialize SPI channel (channel, baud rate set to 20MHz)
   spi_init(SPI_PORT, 20000000) ;
@@ -463,6 +552,9 @@ int main(){
   );
 
   dma_start_channel_mask(1u << ctrl_chan) ;
+  for (uint16_t i = 0; i < row_num + 1; ++i) {
+    row_width_table[i] = i * 35;
+  }
   // Exit main.
   // No code executing!!
   
