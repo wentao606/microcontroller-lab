@@ -99,10 +99,11 @@ char color = WHITE ;
 
 // row number
 static int ball_num = 10;
-static int ball_num_set;
+static int ball_num_set = 0;
 static int row_num = 16;
 int data_chan;
 int last_peg = -1;
+uint8_t prev_ball_num = 0;
 
 static uint32_t start_time;
 static uint32_t boot_time;
@@ -170,7 +171,7 @@ fix15 intermediate_term;
 
 #define peg_num 1
 // #define ball_num 15
-#define max_ball_num 100
+#define max_ball_num 300
 #define min_ball_num 1
 
 
@@ -197,7 +198,7 @@ BoidCoordinates ball_coordinate[max_ball_num];
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
 {
-  float rand_vx = (float)rand()/RAND_MAX*0.5 ;
+  float rand_vx = (float)rand()/RAND_MAX*0.1 ;
   // Start in center of screen
   *x = int2fix15(320) ;
   *y = int2fix15(30) ;
@@ -275,7 +276,7 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
     
 
     int rand_direc = rand() % 2 ;
-    float rand_vx = (float)rand()/RAND_MAX*0.5 ;
+    float rand_vx = (float)rand()/RAND_MAX*0.1 ;
 
     *x = int2fix15(320) ;
     *y = int2fix15(30) ;
@@ -338,7 +339,6 @@ void change_ball_num(){
 
 }
 
-
 // ==================================================
 // === users serial input thread
 // ==================================================
@@ -380,21 +380,35 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     static int begin_time ;
     static int spare_time ;
 
+    // prev_ball_num = ball_num_set;
+    // change_ball_num();
     // Spawn a boid
     for (int i = 0; i < ball_num_set; i++){
       int rand_direc = rand() % 2 ;
-      spawnBoid(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy, rand_direc);
+      spawnBoid(&ball_coordinate[i].x, &ball_coordinate[i].y, 
+        &ball_coordinate[i].vx, &ball_coordinate[i].vy, rand_direc);
     }
     
-    
-
     while(1) {
       // Measure time at start of thread
       begin_time = time_us_32() ;      
       //
       drawBoard();
       //
+      prev_ball_num = ball_num_set;
       change_ball_num();
+      if (prev_ball_num < ball_num_set) {
+        for (int i = prev_ball_num; i < ball_num_set; ++i) {
+          int rand_direc = rand() % 2 ;
+          spawnBoid(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx,
+            &ball_coordinate[i].vy, rand_direc);
+        }
+      }
+      else if ( prev_ball_num > ball_num_set) {
+        for (int i = ball_num_set; i < prev_ball_num; ++i) {
+          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+        }
+      }
       // erase boid
       for (int i = 0; i < max_ball_num; i++){
         if (i < ball_num) {
@@ -402,9 +416,9 @@ static PT_THREAD (protothread_anim(struct pt *pt))
           ballPegCollision(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy);
           fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
         }
-        else {
-          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
-        }
+        // else {
+        //   fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+        // }
         
       }
       display(time_us_32() - start_time);
@@ -418,7 +432,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
   PT_END(pt);
 } // animation thread
 
-
+int prev_height[17];
 // Animation on core 1
 static PT_THREAD (protothread_anim1(struct pt *pt))
 {
@@ -434,8 +448,21 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
       begin_time = time_us_32() ; 
       for (int i = 0; i < (row_num + 1); ++i) {
         // (1-fix2int15(divfix(int2fix15(bottom_ball[i]), int2fix15(fallen_ball_num))))*70
-        printf("%dth: %d\n", i, bottom_ball[i]);
-        fillRect(row_width_table[i], (short)500 - int2fix15(bottom_ball[i]), 38, 100, YELLOW);
+        //  (short)480 - (short)multfix15(divfix(int2fix15(bottom_ball[i]), int2fix15(fallen_ball_num)), 50),
+        
+        int height = (int)((float)(bottom_ball[i]) / fallen_ball_num * 250);
+        height = height > 50? 50:height;
+        int diff = 0;
+        if (prev_height[i] > height) {
+          diff = prev_height[i] - height;
+          fillRect(row_width_table[i], 
+            (short)480 - prev_height[i],
+            38, diff, BLACK);
+        }
+        fillRect(row_width_table[i], 
+          (short)480 - height,
+          36, 50, YELLOW);
+        prev_height[i] = height;
       }
       // delay in accordance with frame rate
       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
