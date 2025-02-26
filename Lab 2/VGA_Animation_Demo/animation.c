@@ -98,7 +98,7 @@ typedef signed int fix15 ;
 char color = WHITE ;
 
 // row number
-static int ball_num = 10;
+static int ball_num = 0;
 static int ball_num_set = 0;
 static int row_num = 16;
 int data_chan;
@@ -132,8 +132,8 @@ static int height16 = 0;
 static int height17 = 0;
 
 
-uint16_t potentio_read;
-uint16_t potentio_read_prev;
+int potentio_read;
+int potentio_read_prev;
 
 // bounciness
 static fix15 bounciness = float2fix15(0.5);
@@ -171,7 +171,7 @@ fix15 intermediate_term;
 
 #define peg_num 1
 // #define ball_num 15
-#define max_ball_num 300
+#define max_ball_num 251
 #define min_ball_num 1
 
 
@@ -309,7 +309,7 @@ void drawBoard(){
 
 void display(uint32_t boot_time){
   sprintf(text1, "Number of fallen Balls: %d", fallen_ball_num);
-  sprintf(text2, "Number of Balls: %d", ball_num_set);
+  sprintf(text2, "Number of Balls: %d   ", ball_num_set);
   int boot_time_s = boot_time / 1000000;
   sprintf(text3, "Time: %d", boot_time_s);
   setCursor(10, 10);
@@ -325,14 +325,39 @@ void display(uint32_t boot_time){
   writeString(text3);
 }
 
+// int sum = 0;
+// int num_sum = 0;
+// uint16_t size = 10;
+// void change_ball_num(){
+  
+//   adc_select_input(0);
+//   potentio_read = adc_read();
+//   sum += potentio_read;
+//   num_sum ++;
 
+//   if (potentio_read != potentio_read_prev && num_sum == size){
+//     int k = (float)sum / (float)size * 1.0;
+//     ball_num_set = (int)min_ball_num + (int)((k-13)*(max_ball_num-min_ball_num)/(4095-13));
+//     ball_num = ball_num_set;
+//     printf("%d\n", potentio_read);
+//   }
+
+//   if (num_sum == size) {
+//     sum = 0;
+//     num_sum = 0;
+//   }
+
+// }
+
+int ball_num_prev = 0;
 void change_ball_num(){
   
-  adc_select_input  (0);
+  adc_select_input(0);
   potentio_read = adc_read();
-
+  ball_num_prev = ball_num_set;
   if (potentio_read != potentio_read_prev){
-    ball_num_set = (int)min_ball_num + (int)(potentio_read*(max_ball_num-min_ball_num)/4095);
+    ball_num_set = (int)min_ball_num + (int)((potentio_read-13)*(max_ball_num-min_ball_num)/(4095-13));
+    ball_num_set = ball_num_prev + (int)((ball_num_set - ball_num_prev)>>4);
     ball_num = ball_num_set;
   }
 
