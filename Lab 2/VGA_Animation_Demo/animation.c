@@ -240,25 +240,25 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 
       if (intermediate_term > int2fix15(0))
       {
-        * x= int2fix15(peg_coordinate[j].x) + multfix15(normal_x, distance+int2fix15(1));
-        * y= int2fix15(peg_coordinate[j].y) + multfix15(normal_y, distance+int2fix15(1));
+        *x = int2fix15(peg_coordinate[j].x) + multfix15(normal_x, distance+int2fix15(1));
+        *y = int2fix15(peg_coordinate[j].y) + multfix15(normal_y, distance+int2fix15(1));
         
 
-        * vx = * vx + multfix15(normal_x, intermediate_term);
-        * vy = * vy + multfix15(normal_y, intermediate_term);
+        *vx = *vx + multfix15(normal_x, intermediate_term);
+        *vy = *vy + multfix15(normal_y, intermediate_term);
 
         if (last_peg != j) {
           
-          * vx = multfix15(bounciness, *vx);
-          * vy = multfix15(bounciness, *vy);
+          *vx = multfix15(bounciness, *vx);
+          *vy = multfix15(bounciness, *vy);
           last_peg = j;
         }
         
       }
-      * vy = gravity +  * vy;
+      *vy = gravity +  *vy;
       // Use ball's updated velocity to update its position
-      * x = * x + * vx;
-      * y = * y + * vy;
+      *x = *x + *vx;
+      *y = *y + *vy;
       break;
     }
 
@@ -485,11 +485,6 @@ int main(){
   adc_init();
   adc_gpio_init(ADC_PIN);
 
-  // while(1){
-  //   adc_select_input(0);
-  //   uint16_t potentio_read = adc_read();
-  //   int ball_num = min_ball_num + (int)(potentio_read*(max_ball_num-min_ball_num)/4095);
-  // }
 
   // Initialize SPI channel (channel, baud rate set to 20MHz)
   spi_init(SPI_PORT, 20000000) ;
@@ -573,4 +568,5 @@ int main(){
 
   // start scheduler
   pt_schedule_start ;
+  
 } 
