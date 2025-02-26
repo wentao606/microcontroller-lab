@@ -49,7 +49,7 @@
 
 // Sine table
 int raw_sin[sine_table_size] ;
-int row_width_table[17];
+int row_width_table[18];
 
 // Table of values to be sent to DAC
 unsigned short DAC_data[sine_table_size] ;
@@ -111,7 +111,7 @@ static int fallen_ball_num;
 static char text1[40];
 static char text2[40];
 static char text3[40];
-int bottom_ball[17];
+int bottom_ball[17] = {0};
 static int height1 = 0;
 static int height2 = 0;
 static int height3 = 0;
@@ -268,29 +268,23 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
   if hitBottom(*y){
     fallen_ball_num ++;
     for (int i = 0; i < (row_num + 1); ++i) {
-      // if (*x >= int2fix15(i * 35) && *x < int2fix15(i * 35)) {
-      //   bottom_ball[i]++;
-      // }
-      float k = 1 / i;
-      fillRect(row_width_table[i], 430, 35, 100, YELLOW);
+      if ((*x <= int2fix15(row_width_table[i + 1])) && (*x >= int2fix15(row_width_table[i]))) {
+        bottom_ball[i] ++;
+      }
     }
     
-    if (ball_num_set < ball_num){
-      ball_num --;
-    }
-    else{
-      ball_num = ball_num_set;
-      int rand_direc = rand() % 2 ;
-      float rand_vx = (float)rand()/RAND_MAX*0.5 ;
 
-      *x = int2fix15(320) ;
-      *y = int2fix15(30) ;
-      if (rand_direc) *vx =float2fix15(rand_vx) ;
-      else *vx = float2fix15(-rand_vx) ;
+    int rand_direc = rand() % 2 ;
+    float rand_vx = (float)rand()/RAND_MAX*0.5 ;
 
-      // Moving down
-      *vy = int2fix15(1) ;
-    }
+    *x = int2fix15(320) ;
+    *y = int2fix15(30) ;
+    if (rand_direc) *vx =float2fix15(rand_vx) ;
+    else *vx = float2fix15(-rand_vx) ;
+
+    // Moving down
+    *vy = int2fix15(1) ;
+    
     
   }
   // Apply gravity
@@ -314,19 +308,19 @@ void drawBoard(){
 
 void display(uint32_t boot_time){
   sprintf(text1, "Number of fallen Balls: %d", fallen_ball_num);
-  sprintf(text2, "Number of Balls: %d", ball_num);
+  sprintf(text2, "Number of Balls: %d", ball_num_set);
   int boot_time_s = boot_time / 1000000;
   sprintf(text3, "Time: %d", boot_time_s);
   setCursor(10, 10);
-  fillRect(10, 10, 200, 100, BLACK);
-  setTextColor(WHITE);
+  // fillRect(10, 10, 200, 100, BLACK);
+  setTextColor2(WHITE, BLACK);
   setTextSize(1);
   writeString(text1);
   setCursor(10, 20);
-  fillRect(10, 20, 200, 100, BLACK);
+  // fillRect(10, 20, 200, 100, BLACK);
   writeString(text2);
   setCursor(10, 30);
-  fillRect(10, 30, 200, 100, BLACK);
+  // fillRect(10, 30, 200, 100, BLACK);
   writeString(text3);
 }
 
@@ -338,6 +332,7 @@ void change_ball_num(){
 
   if (potentio_read != potentio_read_prev){
     ball_num_set = (int)min_ball_num + (int)(potentio_read*(max_ball_num-min_ball_num)/4095);
+    ball_num = ball_num_set;
   }
 
 
@@ -386,7 +381,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     static int spare_time ;
 
     // Spawn a boid
-    for (int i = 0; i < ball_num; i++){
+    for (int i = 0; i < ball_num_set; i++){
       int rand_direc = rand() % 2 ;
       spawnBoid(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy, rand_direc);
     }
@@ -424,54 +419,43 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 } // animation thread
 
 
-// // Animation on core 1
-// static PT_THREAD (protothread_anim1(struct pt *pt))
-// {
-//     // Mark beginning of thread
-//     PT_BEGIN(pt);
+// Animation on core 1
+static PT_THREAD (protothread_anim1(struct pt *pt))
+{
+    // Mark beginning of thread
+    PT_BEGIN(pt);
 
-//     // Variables for maintaining frame rate
-//     static int begin_time ;
-//     static int spare_time ;
+    // Variables for maintaining frame rate
+    static int begin_time ;
+    static int spare_time ;
 
-//     // Spawn a boid
-//     spawnBoid(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy, 1);
+    while(1) {
+      // Measure time at start of thread
+      begin_time = time_us_32() ; 
+      for (int i = 0; i < (row_num + 1); ++i) {
+        // (1-fix2int15(divfix(int2fix15(bottom_ball[i]), int2fix15(fallen_ball_num))))*70
+        printf("%dth: %d\n", i, bottom_ball[i]);
+        fillRect(row_width_table[i], (short)500 - int2fix15(bottom_ball[i]), 38, 100, YELLOW);
+      }
+      // delay in accordance with frame rate
+      spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
+      // yield for necessary amount of time
+      PT_YIELD_usec(spare_time) ;
+     // NEVER exit while
+    } // END WHILE(1)
+  PT_END(pt);
+} // animation thread
 
-//     while(1) {
-//       // Measure time at start of thread
-//       begin_time = time_us_32() ; 
-      
-//       // erase boid
-//       drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, BLACK);
-//       // update boid's position and velocity
-//       wallsAndEdges(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy) ;
-//       // draw the boid at its new position
-//       drawRect(fix2int15(boid1_x), fix2int15(boid1_y), 2, 2, color); 
+// ========================================
+// === core 1 main -- started in main below
+// ========================================
+void core1_main(){
+  // Add animation thread
+  pt_add_thread(protothread_anim1);
+  // Start the scheduler
+  pt_schedule_start ;
 
-      
-
-//       //
-
-
-//       // delay in accordance with frame rate
-//       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
-//       // yield for necessary amount of time
-//       PT_YIELD_usec(spare_time) ;
-//      // NEVER exit while
-//     } // END WHILE(1)
-//   PT_END(pt);
-// } // animation thread
-
-// // ========================================
-// // === core 1 main -- started in main below
-// // ========================================
-// void core1_main(){
-//   // Add animation thread
-//   pt_add_thread(protothread_anim1);
-//   // Start the scheduler
-//   pt_schedule_start ;
-
-// }
+}
 
 // ========================================
 // === main
@@ -547,20 +531,15 @@ int main(){
   );
 
   dma_start_channel_mask(1u << ctrl_chan) ;
-  for (uint16_t i = 0; i < row_num + 1; ++i) {
-    row_width_table[i] = i * 35;
+  for (uint16_t i = 0; i < row_num + 2; ++i) {
+    row_width_table[i] = i * 38;
   }
-  // Exit main.
-  // No code executing!!
-  
-
-  // DMA
   // initialize VGA
   initVGA() ;
   
-  // // start core 1 
-  // multicore_reset_core1();
-  // multicore_launch_core1(&core1_main);
+  // start core 1 
+  multicore_reset_core1();
+  multicore_launch_core1(&core1_main);
 
   // add threads
   pt_add_thread(protothread_serial);
