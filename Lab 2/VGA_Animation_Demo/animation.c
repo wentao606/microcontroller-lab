@@ -70,6 +70,7 @@ unsigned short * address_pointer_dma = &DAC_data[0] ;
 
 // Button gpio 
 #define BUTTON_PIN 3
+#define LED             25
 
 // Number of DMA transfers per event
 const uint32_t transfer_count = sine_table_size ;
@@ -96,13 +97,24 @@ typedef signed int fix15 ;
 
 // uS per frame
 #define FRAME_RATE 33000
+// Number of pegs, Number of balls
+#define peg_num 1
+#define max_ball_num 300
+#define nominal_max_ball_num 244
+#define min_ball_num 1
+
+
+
+// Peg separations
+#define vertical_seperation 19
+#define horizontal_seperation 38
 
 // the color of the boid
 char color = WHITE ;
 
 // row number
-static int ball_num = 0;
-static int ball_num_set = 0;
+static int ball_num_set = nominal_max_ball_num;
+
 static int row_num = 16;
 int data_chan;
 int last_peg = -1;
@@ -111,30 +123,15 @@ uint8_t prev_ball_num = 0;
 static uint32_t start_time;
 static uint32_t boot_time;
 
-static int fallen_ball_num;
+static int fallen_ball_num = 0;
 static char text1[40];
 static char text2[40];
 static char text3[40];
 static char text4[40];
-int bottom_ball[17] = {0};
-static int height1 = 0;
-static int height2 = 0;
-static int height3 = 0;
-static int height4 = 0;
-static int height5 = 0;
-static int height6 = 0;
-static int height7 = 0;
-static int height8 = 0;
-static int height9 = 0;
-static int height10 = 0;
-static int height11 = 0;
-static int height12 = 0;
-static int height13 = 0;
-static int height14 = 0;
-static int height15 = 0;
-static int height16 = 0;
-static int height17 = 0;
+static char text5[50];
+static char text6[50];
 
+int bottom_ball[17] = {0};
 
 int potentio_read;
 int potentio_read_prev;
@@ -144,8 +141,9 @@ static fix15 bounciness = float2fix15(0.5);
 static fix15 min_bounciness = float2fix15(0.1);
 static fix15 max_bounciness = float2fix15(0.9);
 
+
 // gravity
-static fix15 gravity= float2fix15(0.75);
+static fix15 gravity = float2fix15(0.75);
 
 // Boid on core 0
 fix15 boid0_x ;
@@ -173,19 +171,9 @@ fix15 normal_x;
 fix15 normal_y;
 fix15 intermediate_term;
 
-// Number of pegs, Number of balls
 
-#define peg_num 1
-// #define ball_num 15
-#define max_ball_num 251
-#define min_ball_num 1
-
-
-
-// Peg separations
-#define vertical_seperation 19
-#define horizontal_seperation 38
-
+// current mode
+char mode[4][10] = {"Reset", "ball_num", "bouncies", "gravity"};
 
 typedef struct {
     int x;
@@ -211,7 +199,8 @@ typedef enum {
 
 static ButtonState button_state = RESET;
 static int button_value = -1;
-static int button_control = -1;
+static uint8_t button_control_prev = 0;
+static uint8_t button_control = 0;
 static int possible = -1;
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
@@ -281,8 +270,6 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
       break;
     }
 
-    // if (hit)
-      // break;
   }
   if hitBottom(*y){
     fallen_ball_num ++;
@@ -326,11 +313,13 @@ void drawBoard(){
 }
 
 void display(uint32_t boot_time){
-  sprintf(text1, "Number of fallen Balls: %d", fallen_ball_num);
+  sprintf(text1, "Number of fallen Balls: %d   ", fallen_ball_num);
   sprintf(text2, "Number of Balls: %d   ", ball_num_set);
   int boot_time_s = boot_time / 1000000;
-  sprintf(text3, "Time: %d", boot_time_s);
-  sprintf(text4, "Bounciness: %f", fix2float15(bounciness));
+  sprintf(text3, "Time: %d   ", boot_time_s);
+  sprintf(text4, "Bounciness: %.1f   ", fix2float15(bounciness));
+  sprintf(text5, "gravity: %.2f     ", fix2float15(gravity));
+  sprintf(text6, "Current mode: %s     ", mode[button_control]);
 
   setCursor(10, 10);
   // fillRect(10, 10, 200, 100, BLACK);
@@ -345,122 +334,118 @@ void display(uint32_t boot_time){
   writeString(text3);
   setCursor(10, 40);
   writeString(text4);
+  setCursor(10, 50);
+  writeString(text5);
+  setCursor(10, 60);
+  writeString(text6);
 
 }
 
-// int sum = 0;
-// int num_sum = 0;
-// uint16_t size = 10;
-// void change_ball_num(){
-  
-//   adc_select_input(0);
-//   potentio_read = adc_read();
-//   sum += potentio_read;
-//   num_sum ++;
-
-//   if (potentio_read != potentio_read_prev && num_sum == size){
-//     int k = (float)sum / (float)size * 1.0;
-//     ball_num_set = (int)min_ball_num + (int)((k-13)*(max_ball_num-min_ball_num)/(4095-13));
-//     ball_num = ball_num_set;
-//     printf("%d\n", potentio_read);
-//   }
-
-//   if (num_sum == size) {
-//     sum = 0;
-//     num_sum = 0;
-//   }
-
-// }
 void button_pressing()
 {
-switch (button_state)
-{
+  switch (button_state)
+  {
 
-case RESET:
-  button_value = gpio_get(BUTTON_PIN);
-  button_control = 0;
-  button_state = BUTTON_NOT_PRESSED;
-  break;
-
-case BUTTON_NOT_PRESSED:
-  if (button_value == 0){
+  case RESET:
     button_value = gpio_get(BUTTON_PIN);
+    button_control = 0;
     button_state = BUTTON_NOT_PRESSED;
-  }
-  else{
-    possible = button_value;
-    button_value = gpio_get(BUTTON_PIN);
-    button_state = BUTTON_MAYBE_PRESSED;
-  }
-  break;
+    break;
 
-case BUTTON_MAYBE_PRESSED:
-  if (button_value == possible){
-    button_value = gpio_get(BUTTON_PIN);
-    button_control += (button_control == 2)?-2:1; //remainder 1:,2:,3:
-    button_state = BUTTON_PRESSED;
-  }
-  else{
-    button_value = gpio_get(BUTTON_PIN);
-    button_state = BUTTON_NOT_PRESSED;
-  }
-  break;
-case BUTTON_PRESSED:
-  if (button_value == possible){
+  case BUTTON_NOT_PRESSED:
+    if (button_value == 0){
       button_value = gpio_get(BUTTON_PIN);
-      // button_control += 1; //remainder 1:,2:,3:
+      button_state = BUTTON_NOT_PRESSED;
+    }
+    else{
+      possible = button_value;
+      button_value = gpio_get(BUTTON_PIN);
+      button_state = BUTTON_MAYBE_PRESSED;
+    }
+    break;
+
+  case BUTTON_MAYBE_PRESSED:
+    if (button_value == possible){
+      button_value = gpio_get(BUTTON_PIN);
+      button_control += (button_control == 3)?-3:1; //remainder 1:,2:,3:
       button_state = BUTTON_PRESSED;
     }
-  else{
-    button_value = gpio_get(BUTTON_PIN);
-    button_state = BUTTON_MAYBE_NOT_PRESSED;
-  }
-case BUTTON_MAYBE_NOT_PRESSED:
-  if (button_value == possible){
-    button_value = gpio_get(BUTTON_PIN);
-    button_state = BUTTON_PRESSED;
-  }
-  else{
-    button_value = gpio_get(BUTTON_PIN);
-    button_state = BUTTON_NOT_PRESSED;
-  }
-  break;
+    else{
+      button_value = gpio_get(BUTTON_PIN);
+      button_state = BUTTON_NOT_PRESSED;
+    }
+    break;
+  case BUTTON_PRESSED:
+    if (button_value == possible){
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_PRESSED;
+      }
+    else{
+      button_value = gpio_get(BUTTON_PIN);
+      button_state = BUTTON_MAYBE_NOT_PRESSED;
+    }
+  case BUTTON_MAYBE_NOT_PRESSED:
+    if (button_value == possible) {
+      button_value = gpio_get(BUTTON_PIN);
+      button_state = BUTTON_PRESSED;
+    }
+    else {
+      button_value = gpio_get(BUTTON_PIN);
+      button_state = BUTTON_NOT_PRESSED;
+    }
+    break;
 
-default:
-  button_value = -1;
-  possible = -1;
-  break;
+  default:
+    button_value = -1;
+    possible = -1;
+    break;
 
+  }
 }
 
-}
-
+// change ball numbers
 int ball_num_prev = 0;
 void change_ball_num(){
-  if (button_control == 1){
+  if (button_control == 1) {
     adc_select_input(0);
     potentio_read = adc_read();
     ball_num_prev = ball_num_set;
-    if (potentio_read != potentio_read_prev){
+    if (potentio_read != potentio_read_prev) {
       ball_num_set = (int)min_ball_num + (int)((potentio_read-13)*(max_ball_num-min_ball_num)/(4095-13));
       ball_num_set = ball_num_prev + (int)((ball_num_set - ball_num_prev)>>4);
-      ball_num = ball_num_set;
     }
   }
 }
 
+// change ball bounciness
 int ball_bounciness_prev = 0;
-void change_ball_bounciness(){
-  if (button_control == 2){
+void change_ball_bounciness() {
+  if (button_control == 2) {
     adc_select_input(0);
     potentio_read = int2fix15(adc_read());
     ball_bounciness_prev = bounciness;
+    if (potentio_read != potentio_read_prev) {
+      potentio_read_prev = potentio_read;
+      bounciness = min_bounciness + divfix(multfix15((potentio_read-int2fix15(13)), 
+                    (max_bounciness-min_bounciness)),int2fix15(4095-13));
+    }
+  }
+}
+
+// change ball gravity
+fix15 ball_gravity_prev = float2fix15(0.75);
+fix15 min_gravity = float2fix15(0.2);
+fix15 max_gravity = float2fix15(0.85);
+
+void change_ball_gravity() {
+  if (button_control == 3) {
+    adc_select_input(0);
+    potentio_read = int2fix15(adc_read());
+    ball_gravity_prev = gravity;
     if (potentio_read != potentio_read_prev){
       potentio_read_prev = potentio_read;
-      bounciness = min_bounciness + divfix(multfix15((potentio_read-int2fix15(13)), (max_bounciness-min_bounciness)),int2fix15(4095-13));
-      // ball_num_set = ball_num_prev + (int)((ball_num_set - ball_num_prev)>>4);
-      // ball_num = ball_num_set;
-      printf("bounciness:%f", fix2float15(bounciness));
+      gravity = min_gravity + divfix(multfix15((potentio_read-int2fix15(13)), 
+                (max_gravity-min_gravity)),int2fix15(4095-13));
     }
   }
 }
@@ -469,36 +454,36 @@ void change_ball_bounciness(){
 // ==================================================
 // === users serial input thread
 // ==================================================
-static PT_THREAD (protothread_serial(struct pt *pt))
-{
-    PT_BEGIN(pt);
-    // stores user input
-    static int user_input ;
-    // wait for 0.1 sec
-    PT_YIELD_usec(1000000) ;
-    // announce the threader version
-    sprintf(pt_serial_out_buffer, "Protothreads RP2040 v1.0\n\r");
-    // non-blocking write
-    serial_write ;
-      while(1) {
-        // print prompt
-        sprintf(pt_serial_out_buffer, "input a number in the range 1-15: ");
-        // non-blocking write
-        serial_write ;
-        // spawn a thread to do the non-blocking serial read
-        serial_read ;
-        // convert input string to number
-        sscanf(pt_serial_in_buffer,"%d", &user_input) ;
-        // update boid color
-        if ((user_input > 0) && (user_input < 16)) {
-          color = (char)user_input ;
-        }
-      } // END WHILE(1)
-  PT_END(pt);
-} // timer thread
+// static PT_THREAD (protothread_serial(struct pt *pt))
+// {
+//     PT_BEGIN(pt);
+//     // stores user input
+//     static int user_input ;
+//     // wait for 0.1 sec
+//     PT_YIELD_usec(1000000) ;
+//     // announce the threader version
+//     sprintf(pt_serial_out_buffer, "Protothreads RP2040 v1.0\n\r");
+//     // non-blocking write
+//     serial_write ;
+//       while(1) {
+//         // print prompt
+//         sprintf(pt_serial_out_buffer, "input a number in the range 1-15: ");
+//         // non-blocking write
+//         serial_write ;
+//         // spawn a thread to do the non-blocking serial read
+//         serial_read ;
+//         // convert input string to number
+//         sscanf(pt_serial_in_buffer,"%d", &user_input) ;
+//         // update boid color
+//         if ((user_input > 0) && (user_input < 16)) {
+//           color = (char)user_input ;
+//         }
+//       } // END WHILE(1)
+//   PT_END(pt);
+// } // timer thread
 
 // Animation on core 0
-static PT_THREAD (protothread_anim(struct pt *pt))
+static PT_THREAD (protothread_anim_ball(struct pt *pt))
 {
     // Mark beginning of thread
     PT_BEGIN(pt);
@@ -507,8 +492,6 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     static int begin_time ;
     static int spare_time ;
 
-    // prev_ball_num = ball_num_set;
-    // change_ball_num();
     // Spawn a boid
     for (int i = 0; i < ball_num_set; i++){
       int rand_direc = rand() % 2 ;
@@ -521,10 +504,8 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       begin_time = time_us_32() ;      
       //
       drawBoard();
-      //
       prev_ball_num = ball_num_set;
       change_ball_num();
-      change_ball_bounciness();
       if (prev_ball_num < ball_num_set) {
         for (int i = prev_ball_num; i < ball_num_set; ++i) {
           int rand_direc = rand() % 2 ;
@@ -538,21 +519,23 @@ static PT_THREAD (protothread_anim(struct pt *pt))
         }
       }
       // erase boid
-      for (int i = 0; i < max_ball_num; i++){
-        if (i < ball_num) {
+      for (int i = 0; i < ball_num_set; i++){
+        if (i < ball_num_set) {
           fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
           ballPegCollision(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy);
           fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
         }
-        // else {
-        //   fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
-        // }
-        
       }
-      display(time_us_32() - start_time);
       
       // delay in accordance with frame rate
       spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
+      if(spare_time <= 0) {
+        gpio_put(LED, !gpio_get(LED));
+      }
+      else {
+        gpio_put(LED, 0);
+      }
+      spare_time = FRAME_RATE - (time_us_32() - begin_time);
       // yield for necessary amount of time
       PT_YIELD_usec(spare_time) ;
      // NEVER exit while
@@ -562,7 +545,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 
 int prev_height[17];
 // Animation on core 1
-static PT_THREAD (protothread_anim1(struct pt *pt))
+static PT_THREAD (protothread_anim_hist(struct pt *pt))
 {
     // Mark beginning of thread
     PT_BEGIN(pt);
@@ -574,11 +557,15 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
     while(1) {
       // Measure time at start of thread
       begin_time = time_us_32() ; 
+      change_ball_bounciness();
+      change_ball_gravity();
+      // draw histogram
       for (int i = 0; i < (row_num + 1); ++i) {
-        // (1-fix2int15(divfix(int2fix15(bottom_ball[i]), int2fix15(fallen_ball_num))))*70
-        //  (short)480 - (short)multfix15(divfix(int2fix15(bottom_ball[i]), int2fix15(fallen_ball_num)), 50),
         
         int height = (int)((float)(bottom_ball[i]) / fallen_ball_num * 250);
+        if (fallen_ball_num == 0) {
+          height = 0;
+        }
         height = height > 50? 50:height;
         int diff = 0;
         if (prev_height[i] > height) {
@@ -592,20 +579,46 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
           36, 50, YELLOW);
         prev_height[i] = height;
       }
+      // draw information
+      display(time_us_32() - start_time);
       // delay in accordance with frame rate
-      spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
+      spare_time = FRAME_RATE - (time_us_32() - begin_time);
+      if(spare_time <= 0) {
+        gpio_put(LED, 1);
+      }
+      else {
+        gpio_put(LED, 0);
+      }
+      spare_time = FRAME_RATE - (time_us_32() - begin_time);
       // yield for necessary amount of time
       PT_YIELD_usec(spare_time) ;
      // NEVER exit while
     } // END WHILE(1)
   PT_END(pt);
 } // animation thread
-static PT_THREAD (protothread_anim2(struct pt *pt))
+
+// ball pressing thread
+static PT_THREAD (protothread_anim_press(struct pt *pt))
 {
     // Mark beginning of thread
     PT_BEGIN(pt);
-    button_pressing();
-    PT_YIELD_usec(30000);
+    while(1) {
+      button_pressing();
+      // reset state, set number of balls to max and reset histogram
+      if (button_control != button_control_prev) {
+        button_control_prev = button_control;
+        if (button_control == 0) {
+          fallen_ball_num = 0;
+          for (uint8_t i = 0; i < row_num + 1; ++i) {
+            bottom_ball[i] = 0;
+          }
+          ball_num_set = 243;
+        }
+      }
+      
+      PT_YIELD_usec(30000);
+    }
+    
   PT_END(pt);
 }
 // ========================================
@@ -613,7 +626,8 @@ static PT_THREAD (protothread_anim2(struct pt *pt))
 // ========================================
 void core1_main(){
   // Add animation thread
-  pt_add_thread(protothread_anim1);
+  pt_add_thread(protothread_anim_hist);
+  pt_add_thread(protothread_anim_press);
   // Start the scheduler
   pt_schedule_start ;
 
@@ -647,6 +661,11 @@ int main(){
   gpio_set_function(PIN_CS, GPIO_FUNC_SPI) ;
   gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
   gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
+
+  // init LED
+  gpio_init(LED);
+  gpio_set_dir(LED, GPIO_OUT);
+  gpio_put(LED, 0);
 
   // Build sine table and DAC data table
   int i ;
@@ -708,9 +727,8 @@ int main(){
   multicore_launch_core1(&core1_main);
 
   // add threads
-  pt_add_thread(protothread_serial);
-  pt_add_thread(protothread_anim);
-  pt_add_thread(protothread_anim2);
+  // pt_add_thread(protothread_serial);
+  pt_add_thread(protothread_anim_ball);
 
   // start scheduler
   pt_schedule_start ;
