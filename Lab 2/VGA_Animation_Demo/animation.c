@@ -68,6 +68,9 @@ unsigned short * address_pointer_dma = &DAC_data[0] ;
 #define SPI_PORT spi0
 #define ADC_PIN 26
 
+// Button gpio 
+#define BUTTON_PIN 3
+
 // Number of DMA transfers per event
 const uint32_t transfer_count = sine_table_size ;
 
@@ -112,6 +115,7 @@ static int fallen_ball_num;
 static char text1[40];
 static char text2[40];
 static char text3[40];
+static char text4[40];
 int bottom_ball[17] = {0};
 static int height1 = 0;
 static int height2 = 0;
@@ -137,6 +141,8 @@ int potentio_read_prev;
 
 // bounciness
 static fix15 bounciness = float2fix15(0.5);
+static fix15 min_bounciness = float2fix15(0.1);
+static fix15 max_bounciness = float2fix15(0.9);
 
 // gravity
 static fix15 gravity= float2fix15(0.75);
@@ -175,6 +181,7 @@ fix15 intermediate_term;
 #define min_ball_num 1
 
 
+
 // Peg separations
 #define vertical_seperation 19
 #define horizontal_seperation 38
@@ -194,7 +201,18 @@ typedef struct {
 } BoidCoordinates;
 BoidCoordinates ball_coordinate[max_ball_num];
 
+typedef enum {
+    RESET,
+    BUTTON_NOT_PRESSED,
+    BUTTON_MAYBE_PRESSED,
+    BUTTON_PRESSED,
+    BUTTON_MAYBE_NOT_PRESSED
+} ButtonState;
 
+static ButtonState button_state = RESET;
+static int button_value = -1;
+static int button_control = -1;
+static int possible = -1;
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
 {
@@ -312,6 +330,8 @@ void display(uint32_t boot_time){
   sprintf(text2, "Number of Balls: %d   ", ball_num_set);
   int boot_time_s = boot_time / 1000000;
   sprintf(text3, "Time: %d", boot_time_s);
+  sprintf(text4, "Bounciness: %f", fix2float15(bounciness));
+
   setCursor(10, 10);
   // fillRect(10, 10, 200, 100, BLACK);
   setTextColor2(WHITE, BLACK);
@@ -323,6 +343,9 @@ void display(uint32_t boot_time){
   setCursor(10, 30);
   // fillRect(10, 30, 200, 100, BLACK);
   writeString(text3);
+  setCursor(10, 40);
+  writeString(text4);
+
 }
 
 // int sum = 0;
@@ -348,21 +371,100 @@ void display(uint32_t boot_time){
 //   }
 
 // }
+void button_pressing()
+{
+switch (button_state)
+{
+
+case RESET:
+  button_value = gpio_get(BUTTON_PIN);
+  button_control = 0;
+  button_state = BUTTON_NOT_PRESSED;
+  break;
+
+case BUTTON_NOT_PRESSED:
+  if (button_value == 0){
+    button_value = gpio_get(BUTTON_PIN);
+    button_state = BUTTON_NOT_PRESSED;
+  }
+  else{
+    possible = button_value;
+    button_value = gpio_get(BUTTON_PIN);
+    button_state = BUTTON_MAYBE_PRESSED;
+  }
+  break;
+
+case BUTTON_MAYBE_PRESSED:
+  if (button_value == possible){
+    button_value = gpio_get(BUTTON_PIN);
+    button_control += (button_control == 2)?-2:1; //remainder 1:,2:,3:
+    button_state = BUTTON_PRESSED;
+  }
+  else{
+    button_value = gpio_get(BUTTON_PIN);
+    button_state = BUTTON_NOT_PRESSED;
+  }
+  break;
+case BUTTON_PRESSED:
+  if (button_value == possible){
+      button_value = gpio_get(BUTTON_PIN);
+      // button_control += 1; //remainder 1:,2:,3:
+      button_state = BUTTON_PRESSED;
+    }
+  else{
+    button_value = gpio_get(BUTTON_PIN);
+    button_state = BUTTON_MAYBE_NOT_PRESSED;
+  }
+case BUTTON_MAYBE_NOT_PRESSED:
+  if (button_value == possible){
+    button_value = gpio_get(BUTTON_PIN);
+    button_state = BUTTON_PRESSED;
+  }
+  else{
+    button_value = gpio_get(BUTTON_PIN);
+    button_state = BUTTON_NOT_PRESSED;
+  }
+  break;
+
+default:
+  button_value = -1;
+  possible = -1;
+  break;
+
+}
+
+}
 
 int ball_num_prev = 0;
 void change_ball_num(){
-  
-  adc_select_input(0);
-  potentio_read = adc_read();
-  ball_num_prev = ball_num_set;
-  if (potentio_read != potentio_read_prev){
-    ball_num_set = (int)min_ball_num + (int)((potentio_read-13)*(max_ball_num-min_ball_num)/(4095-13));
-    ball_num_set = ball_num_prev + (int)((ball_num_set - ball_num_prev)>>4);
-    ball_num = ball_num_set;
+  if (button_control == 1){
+    adc_select_input(0);
+    potentio_read = adc_read();
+    ball_num_prev = ball_num_set;
+    if (potentio_read != potentio_read_prev){
+      ball_num_set = (int)min_ball_num + (int)((potentio_read-13)*(max_ball_num-min_ball_num)/(4095-13));
+      ball_num_set = ball_num_prev + (int)((ball_num_set - ball_num_prev)>>4);
+      ball_num = ball_num_set;
+    }
   }
-
-
 }
+
+int ball_bounciness_prev = 0;
+void change_ball_bounciness(){
+  if (button_control == 2){
+    adc_select_input(0);
+    potentio_read = int2fix15(adc_read());
+    ball_bounciness_prev = bounciness;
+    if (potentio_read != potentio_read_prev){
+      potentio_read_prev = potentio_read;
+      bounciness = min_bounciness + divfix(multfix15((potentio_read-int2fix15(13)), (max_bounciness-min_bounciness)),int2fix15(4095-13));
+      // ball_num_set = ball_num_prev + (int)((ball_num_set - ball_num_prev)>>4);
+      // ball_num = ball_num_set;
+      printf("bounciness:%f", fix2float15(bounciness));
+    }
+  }
+}
+
 
 // ==================================================
 // === users serial input thread
@@ -422,6 +524,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       //
       prev_ball_num = ball_num_set;
       change_ball_num();
+      change_ball_bounciness();
       if (prev_ball_num < ball_num_set) {
         for (int i = prev_ball_num; i < ball_num_set; ++i) {
           int rand_direc = rand() % 2 ;
@@ -497,7 +600,14 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
     } // END WHILE(1)
   PT_END(pt);
 } // animation thread
-
+static PT_THREAD (protothread_anim2(struct pt *pt))
+{
+    // Mark beginning of thread
+    PT_BEGIN(pt);
+    button_pressing();
+    PT_YIELD_usec(30000);
+  PT_END(pt);
+}
 // ========================================
 // === core 1 main -- started in main below
 // ========================================
@@ -520,6 +630,10 @@ int main(){
   // initiate adc hardware and 
   adc_init();
   adc_gpio_init(ADC_PIN);
+
+  // initialize button gpio
+  gpio_init(BUTTON_PIN);
+  gpio_set_dir(BUTTON_PIN, GPIO_IN);
 
 
   // Initialize SPI channel (channel, baud rate set to 20MHz)
@@ -596,6 +710,7 @@ int main(){
   // add threads
   pt_add_thread(protothread_serial);
   pt_add_thread(protothread_anim);
+  pt_add_thread(protothread_anim2);
 
   // start scheduler
   pt_schedule_start ;
