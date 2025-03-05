@@ -99,8 +99,8 @@ typedef signed int fix15 ;
 #define FRAME_RATE 33000
 // Number of pegs, Number of balls
 #define peg_num 1
-#define max_ball_num 900
-#define nominal_max_ball_num 810
+#define max_ball_num 2000
+#define nominal_max_ball_num 1400
 #define min_ball_num 1
 
 
@@ -566,17 +566,21 @@ static PT_THREAD (protothread_anim_hist(struct pt *pt))
         }
         height = height > 50? 50:height;
         int diff = 0;
+        //////////////
         if (prev_height[i] > height) {
           diff = prev_height[i] - height;
           fillRect(row_width_table[i], 
             (short)480 - prev_height[i],
             38, diff, BLACK);
         }
+        diff = height - prev_height[i];
         fillRect(row_width_table[i], 
           (short)480 - height,
-          36, 50, YELLOW);
+          36, diff, YELLOW);
         prev_height[i] = height;
+      ////////////////
       }
+      
       // draw information
       display(time_us_32() - start_time);
       // delay in accordance with frame rate
@@ -655,6 +659,7 @@ void core1_main(){
 // ========================================
 // USE ONLY C-sdk library
 int main(){
+  set_sys_clock_khz(250000, true);
   // initialize stio
   stdio_init_all() ;
   start_time = time_us_32();
