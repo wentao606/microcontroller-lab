@@ -99,8 +99,8 @@ typedef signed int fix15 ;
 #define FRAME_RATE 33000
 // Number of pegs, Number of balls
 #define peg_num 1
-#define max_ball_num 800
-#define nominal_max_ball_num 595
+#define max_ball_num 900
+#define nominal_max_ball_num 810
 #define min_ball_num 1
 
 
@@ -192,14 +192,6 @@ void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
   else *vx = float2fix15(-rand_vx) ;
   // Moving down
   *vy = int2fix15(1) ;
-}
-
-// Draw the boundaries
-void drawArena() {
-  drawVLine(100, 100, 280, BLUE) ;
-  drawVLine(540, 100, 280, WHITE) ;
-  drawHLine(100, 100, 440, WHITE) ;
-  drawHLine(100, 380, 440, WHITE) ;
 }
 
 
@@ -301,7 +293,7 @@ void drawBoard(){
   int num = 0;
   for(int i = 0; i < row_num; i++){
     for (int j = 0; j < i + 1; j++){
-      fillCircle(320-i*horizontal_seperation/2+j*horizontal_seperation, 100+i*vertical_seperation, 6, GREEN);
+      drawCircle(320-i*horizontal_seperation/2+j*horizontal_seperation, 100+i*vertical_seperation, 6, GREEN);
       peg_coordinate[num].x = 320 - i*horizontal_seperation/2 + j*horizontal_seperation;
       peg_coordinate[num].y = 100 + i*vertical_seperation;
       num = num + 1;
@@ -343,9 +335,9 @@ void display(uint32_t boot_time){
   char balls[60];
   for(int i = 0; i < row_num + 1; ++i) {
     sprintf(balls, "%d  ", bottom_ball[i]);
-    setCursor(i*38 + 15, 430);
+    setCursor(i*38 + 15, 415);
     if (i == row_num)
-      setCursor(i*38 + 8, 430);
+      setCursor(i*38 + 8, 415);
     writeString(balls);
   }
 
