@@ -70,7 +70,7 @@ unsigned short * address_pointer_dma = &DAC_data[0] ;
 
 // Button gpio 
 #define BUTTON_PIN 3
-#define LED             25
+#define LED       25
 
 // Number of DMA transfers per event
 const uint32_t transfer_count = sine_table_size ;
@@ -99,7 +99,7 @@ typedef signed int fix15 ;
 #define FRAME_RATE 33000
 // Number of pegs, Number of balls
 #define peg_num 1
-#define max_ball_num 290
+#define max_ball_num 600
 #define nominal_max_ball_num 255
 #define min_ball_num 1
 
@@ -145,23 +145,6 @@ static fix15 max_bounciness = float2fix15(0.9);
 // gravity
 static fix15 gravity = float2fix15(0.75);
 
-// Boid on core 0
-fix15 boid0_x ;
-fix15 boid0_y ;
-fix15 boid0_vx ;
-fix15 boid0_vy ;
-
-// Boid on core 1
-fix15 boid1_x ;
-fix15 boid1_y ;
-fix15 boid1_vx ;
-fix15 boid1_vy ;
-
-// Ball 
-fix15 ball_x;
-fix15 ball_y;
-fix15 ball_vx;
-fix15 ball_vy;
 
 // Compute x and y distances between ball and peg
 fix15 dx;
@@ -598,6 +581,9 @@ static PT_THREAD (protothread_anim_hist(struct pt *pt))
     while(1) {
       // Measure time at start of thread
       begin_time = time_us_32() ; 
+      /////////
+      
+      ////////
       change_ball_bounciness();
       change_ball_gravity();
       // draw histogram
@@ -641,9 +627,13 @@ static PT_THREAD (protothread_anim_hist(struct pt *pt))
 // ball pressing thread
 static PT_THREAD (protothread_anim_press(struct pt *pt))
 {
+  // Variables for maintaining frame rate
+    static int begin_time ;
+    static int spare_time ;
     // Mark beginning of thread
     PT_BEGIN(pt);
     while(1) {
+      begin_time = time_us_32() ;
       button_pressing();
       // reset state, set number of balls to max and reset histogram
       if (button_control != button_control_prev) {
@@ -656,8 +646,20 @@ static PT_THREAD (protothread_anim_press(struct pt *pt))
           ball_num_set = 243;
         }
       }
-      
-      PT_YIELD_usec(30000);
+      // delay in accordance with frame rate
+      spare_time = FRAME_RATE - (time_us_32() - begin_time) ;
+      if(spare_time <= 0) {
+        gpio_put(LED, !gpio_get(LED));
+        
+      }
+      else {
+        gpio_put(LED, 0);
+        // printf("sparetime:%d\n", spare_time);
+      }
+      spare_time = FRAME_RATE - (time_us_32() - begin_time);
+      // yield for necessary amount of time
+      PT_YIELD_usec(spare_time) ;
+      PT_YIELD_usec(5000);
     }
     
   PT_END(pt);
@@ -669,7 +671,7 @@ void core1_main(){
   // Add animation thread
   pt_add_thread(protothread_anim_hist);
   pt_add_thread(protothread_anim_press);
-  // Start the scheduler
+
   pt_schedule_start ;
 
 }
