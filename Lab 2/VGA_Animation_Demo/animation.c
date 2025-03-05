@@ -49,7 +49,7 @@
 
 // Sine table
 int raw_sin[sine_table_size] ;
-int row_width_table[18];
+uint16_t row_width_table[18];
 
 // Table of values to be sent to DAC
 unsigned short DAC_data[sine_table_size] ;
@@ -73,7 +73,7 @@ unsigned short * address_pointer_dma = &DAC_data[0] ;
 #define LED       25
 
 // Number of DMA transfers per event
-const uint32_t transfer_count = sine_table_size ;
+const uint16_t transfer_count = sine_table_size ;
 
 
 //DMA
@@ -99,8 +99,8 @@ typedef signed int fix15 ;
 #define FRAME_RATE 33000
 // Number of pegs, Number of balls
 #define peg_num 1
-#define max_ball_num 600
-#define nominal_max_ball_num 255
+#define max_ball_num 800
+#define nominal_max_ball_num 595
 #define min_ball_num 1
 
 
@@ -113,23 +113,18 @@ typedef signed int fix15 ;
 char color = WHITE ;
 
 // row number
-static int ball_num_set = nominal_max_ball_num;
+static uint16_t ball_num_set = nominal_max_ball_num;
 
-static int row_num = 16;
+static uint8_t row_num = 16;
 int data_chan;
 int last_peg = -1;
-uint8_t prev_ball_num = 0;
+uint16_t prev_ball_num = 0;
 
 static uint32_t start_time;
 static uint32_t boot_time;
 
 static int fallen_ball_num = 0;
 static char text1[40];
-static char text2[40];
-static char text3[40];
-static char text4[40];
-static char text5[50];
-static char text6[50];
 
 int bottom_ball[17] = {0};
 
@@ -182,8 +177,8 @@ typedef enum {
 
 static ButtonState button_state = RESET;
 static int button_value = -1;
-static uint8_t button_control_prev = 0;
-static uint8_t button_control = 0;
+static uint16_t button_control_prev = 0;
+static uint16_t button_control = 0;
 static int possible = -1;
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
@@ -210,7 +205,6 @@ void drawArena() {
 
 void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 {
-  uint8_t hit = 0;
   fix15 ab_dx;
   fix15 ab_dy;
   for (int j = 0; j < 136; j++)
@@ -220,7 +214,6 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 
     if ((dx < int2fix15(10) && dx > int2fix15(-10)) && (dy > int2fix15(-10) && dy < int2fix15(10) )) {
     
-      hit = 1;
       dma_start_channel_mask(1u << data_chan);
       // distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
       ab_dx = (dx < int2fix15(0)) ? -dx : dx;
@@ -318,30 +311,35 @@ void drawBoard(){
 
 void display(uint32_t boot_time){
   sprintf(text1, "Number of fallen Balls: %d   ", fallen_ball_num);
-  sprintf(text2, "Number of Balls: %d   ", ball_num_set);
-  int boot_time_s = boot_time / 1000000;
-  sprintf(text3, "Time: %d   ", boot_time_s);
-  sprintf(text4, "Bounciness: %.1f   ", fix2float15(bounciness));
-  sprintf(text5, "gravity: %.2f     ", fix2float15(gravity));
-  sprintf(text6, "Current mode: %s     ", mode[button_control]);
-
   setCursor(10, 10);
   // fillRect(10, 10, 200, 100, BLACK);
   setTextColor2(WHITE, BLACK);
   setTextSize(1);
   writeString(text1);
+
+  sprintf(text1, "Number of Balls: %d   ", ball_num_set);
   setCursor(10, 20);
   // fillRect(10, 20, 200, 100, BLACK);
-  writeString(text2);
+  writeString(text1);
+
+  int boot_time_s = boot_time / 1000000;
+  sprintf(text1, "Time: %d   ", boot_time_s);
   setCursor(10, 30);
   // fillRect(10, 30, 200, 100, BLACK);
-  writeString(text3);
+  writeString(text1);
+
+  sprintf(text1, "Bounciness: %.1f   ", fix2float15(bounciness));
   setCursor(10, 40);
-  writeString(text4);
+  writeString(text1);
+
+  sprintf(text1, "gravity: %.2f     ", fix2float15(gravity));
   setCursor(10, 50);
-  writeString(text5);
+  writeString(text1);
+
+  sprintf(text1, "Current mode: %s     ", mode[button_control]);
   setCursor(10, 60);
-  writeString(text6);
+  writeString(text1);
+  
   char balls[60];
   for(int i = 0; i < row_num + 1; ++i) {
     sprintf(balls, "%d  ", bottom_ball[i]);
@@ -463,37 +461,6 @@ void change_ball_gravity() {
 }
 
 
-// ==================================================
-// === users serial input thread
-// ==================================================
-// static PT_THREAD (protothread_serial(struct pt *pt))
-// {
-//     PT_BEGIN(pt);
-//     // stores user input
-//     static int user_input ;
-//     // wait for 0.1 sec
-//     PT_YIELD_usec(1000000) ;
-//     // announce the threader version
-//     sprintf(pt_serial_out_buffer, "Protothreads RP2040 v1.0\n\r");
-//     // non-blocking write
-//     serial_write ;
-//       while(1) {
-//         // print prompt
-//         sprintf(pt_serial_out_buffer, "input a number in the range 1-15: ");
-//         // non-blocking write
-//         serial_write ;
-//         // spawn a thread to do the non-blocking serial read
-//         serial_read ;
-//         // convert input string to number
-//         sscanf(pt_serial_in_buffer,"%d", &user_input) ;
-//         // update boid color
-//         if ((user_input > 0) && (user_input < 16)) {
-//           color = (char)user_input ;
-//         }
-//       } // END WHILE(1)
-//   PT_END(pt);
-// } // timer thread
-
 // Animation on core 0
 static PT_THREAD (protothread_anim_ball(struct pt *pt))
 {
@@ -561,6 +528,7 @@ static PT_THREAD (protothread_anim_ball(struct pt *pt))
       }
       spare_time = FRAME_RATE - (time_us_32() - begin_time);
       // yield for necessary amount of time
+      
       PT_YIELD_usec(spare_time) ;
      // NEVER exit while
     } // END WHILE(1)
@@ -582,7 +550,18 @@ static PT_THREAD (protothread_anim_hist(struct pt *pt))
       // Measure time at start of thread
       begin_time = time_us_32() ; 
       /////////
-      
+      button_pressing();
+      // reset state, set number of balls to max and reset histogram
+      if (button_control != button_control_prev) {
+        button_control_prev = button_control;
+        if (button_control == 0) {
+          fallen_ball_num = 0;
+          for (uint8_t i = 0; i < row_num + 1; ++i) {
+            bottom_ball[i] = 0;
+          }
+          ball_num_set = nominal_max_ball_num;
+        }
+      }
       ////////
       change_ball_bounciness();
       change_ball_gravity();
@@ -612,12 +591,15 @@ static PT_THREAD (protothread_anim_hist(struct pt *pt))
       spare_time = FRAME_RATE - (time_us_32() - begin_time);
       if(spare_time <= 0) {
         gpio_put(LED, 1);
+        
       }
       else {
         gpio_put(LED, 0);
       }
+      // printf("sparetime:%d\n", spare_time);
       spare_time = FRAME_RATE - (time_us_32() - begin_time);
       // yield for necessary amount of time
+      
       PT_YIELD_usec(spare_time) ;
      // NEVER exit while
     } // END WHILE(1)
@@ -643,7 +625,7 @@ static PT_THREAD (protothread_anim_press(struct pt *pt))
           for (uint8_t i = 0; i < row_num + 1; ++i) {
             bottom_ball[i] = 0;
           }
-          ball_num_set = 243;
+          ball_num_set = nominal_max_ball_num;
         }
       }
       // delay in accordance with frame rate
@@ -657,9 +639,9 @@ static PT_THREAD (protothread_anim_press(struct pt *pt))
         // printf("sparetime:%d\n", spare_time);
       }
       spare_time = FRAME_RATE - (time_us_32() - begin_time);
+      
       // yield for necessary amount of time
       PT_YIELD_usec(spare_time) ;
-      PT_YIELD_usec(5000);
     }
     
   PT_END(pt);
@@ -670,7 +652,7 @@ static PT_THREAD (protothread_anim_press(struct pt *pt))
 void core1_main(){
   // Add animation thread
   pt_add_thread(protothread_anim_hist);
-  pt_add_thread(protothread_anim_press);
+  // pt_add_thread(protothread_anim_press);
 
   pt_schedule_start ;
 
