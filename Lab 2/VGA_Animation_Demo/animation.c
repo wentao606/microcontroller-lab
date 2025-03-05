@@ -91,16 +91,16 @@ typedef signed int fix15 ;
 #define sqrtfix(a) float2fix15(sqrt(fix2float15(a)))
 // Wall detection
 #define hitBottom(b) (b>int2fix15(400))
-#define hitTop(b) (b<int2fix15(100))
-#define hitLeft(a) (a<int2fix15(100))
-#define hitRight(a) (a>int2fix15(540))
+#define hitTop(b) (b<int2fix15(20))
+#define hitLeft(a) (a<int2fix15(20))
+#define hitRight(a) (a>int2fix15(610))
 
 // uS per frame
 #define FRAME_RATE 33000
 // Number of pegs, Number of balls
 #define peg_num 1
-#define max_ball_num 300
-#define nominal_max_ball_num 244
+#define max_ball_num 290
+#define nominal_max_ball_num 255
 #define min_ball_num 1
 
 
@@ -173,7 +173,7 @@ fix15 intermediate_term;
 
 
 // current mode
-char mode[4][10] = {"Reset", "ball_num", "bouncies", "gravity"};
+char mode[4][15] = {"Reset", "ball_num", "bounciness", "gravity"};
 
 typedef struct {
     int x;
@@ -293,12 +293,24 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
     
     
   }
+  if hitLeft(*x){
+    *vx = - *vx;
+  }
+
+  if hitRight(*x){
+    *vx = - *vx;
+  }
+  
+  if hitTop(*y){
+    *vy = - *vy;
+  }
   // Apply gravity
   * vy = gravity +  * vy;
   // Use ball's updated velocity to update its position
   * x = * x + * vx;
   * y = * y + * vy;
 }
+
 
 void drawBoard(){
   int num = 0;
@@ -338,6 +350,14 @@ void display(uint32_t boot_time){
   writeString(text5);
   setCursor(10, 60);
   writeString(text6);
+  char balls[60];
+  for(int i = 0; i < row_num + 1; ++i) {
+    sprintf(balls, "%d  ", bottom_ball[i]);
+    setCursor(i*38 + 15, 430);
+    if (i == row_num)
+      setCursor(i*38 + 8, 430);
+    writeString(balls);
+  }
 
 }
 
