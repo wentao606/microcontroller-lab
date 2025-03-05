@@ -566,7 +566,7 @@ static PT_THREAD (protothread_anim_hist(struct pt *pt))
         }
         height = height > 50? 50:height;
         int diff = 0;
-        //////////////
+        
         if (prev_height[i] > height) {
           diff = prev_height[i] - height;
           fillRect(row_width_table[i], 
@@ -578,7 +578,7 @@ static PT_THREAD (protothread_anim_hist(struct pt *pt))
           (short)480 - height,
           36, diff, YELLOW);
         prev_height[i] = height;
-      ////////////////
+
       }
       
       // draw information
