@@ -228,6 +228,8 @@ void drawArena() {
 void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
 {
   uint8_t hit = 0;
+  fix15 ab_dx;
+  fix15 ab_dy;
   for (int j = 0; j < 136; j++)
   {
     dx = (fix15)((* x) - int2fix15(peg_coordinate[j].x));
@@ -237,8 +239,15 @@ void ballPegCollision(fix15* x, fix15* y, fix15* vx, fix15* vy)
     
       hit = 1;
       dma_start_channel_mask(1u << data_chan);
-      distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
-      
+      // distance = sqrtfix(multfix15(dx, dx)+multfix15(dy, dy));//fix15 sqrt and fix15 multiplication
+      ab_dx = (dx < int2fix15(0)) ? -dx : dx;
+      ab_dy = (dy < int2fix15(0)) ? -dy : dy;
+      if (ab_dx < ab_dy || ab_dx == ab_dy){
+        distance = multfix15(float2fix15(0.960433870103), ab_dy) + multfix15(float2fix15(0.397824734759), ab_dx);
+      }
+      else{
+        distance = multfix15(float2fix15(0.960433870103), ab_dx) + multfix15(float2fix15(0.397824734759), ab_dy);
+      }
       
       normal_x =  divfix(dx, distance);//fix15 division
       normal_y =  divfix(dy, distance);//fix15 division
@@ -535,15 +544,27 @@ static PT_THREAD (protothread_anim_ball(struct pt *pt))
       }
       else if ( prev_ball_num > ball_num_set) {
         for (int i = ball_num_set; i < prev_ball_num; ++i) {
-          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+          // 
+          drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), BLACK);
+          drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y), BLACK);
+          drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y)+1, BLACK);
+          drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y)+1, BLACK);
         }
       }
       // erase boid
       for (int i = 0; i < ball_num_set; i++){
         if (i < ball_num_set) {
-          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+          // fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+          drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), BLACK);
+          drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y), BLACK);
+          drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y)+1, BLACK);
+          drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y)+1, BLACK);
           ballPegCollision(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy);
-          fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
+          // fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
+          drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), color);
+          drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y), color);
+          drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y)+1, color);
+          drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y)+1, color);
         }
       }
       
