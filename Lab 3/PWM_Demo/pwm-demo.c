@@ -1,13 +1,6 @@
 /**
  * V. Hunter Adams (vha3@cornell.edu)
  * PWM demo code with serial input
- * 
- * This demonstration sets a PWM duty cycle to a
- * user-specified value.
- * 
- * HARDWARE CONNECTIONS
- *   - GPIO 4 ---> PWM output
- * 
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,16 +13,11 @@
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
 
-#include "pt_cornell_rp2040_v1_3.h"
+#include "pt_cornell_rp2040_v1.h"
 
-// PWM wrap value and clock divide value
-// For a CPU rate of 125 MHz, this gives
-// a PWM frequency of 1 kHz.
-#define WRAPVAL 5000
-#define CLKDIV 25.0f
-
-// GPIO we're using for PWM
-#define PWM_OUT 4
+// Midpoint of potentiometer
+#define WRAPVAL 25000
+#define CLKDIV 5.0f
 
 // Variable to hold PWM slice number
 uint slice_num ;
@@ -38,30 +26,31 @@ uint slice_num ;
 volatile int control ;
 volatile int old_control ;
 
-// PWM interrupt service routine
+
 void on_pwm_wrap() {
+
     // Clear the interrupt flag that brought us here
-    pwm_clear_irq(pwm_gpio_to_slice_num(PWM_OUT));
-    // Update duty cycle
+    pwm_clear_irq(pwm_gpio_to_slice_num(4));
+
     if (control!=old_control) {
         old_control = control ;
-        pwm_set_chan_level(slice_num, PWM_CHAN_A, control);
+        pwm_set_chan_level(slice_num, PWM_CHAN_B, control);
     }
 }
 
-// User input thread
+
 static PT_THREAD (protothread_serial(struct pt *pt))
 {
     PT_BEGIN(pt) ;
     static int test_in ;
     while(1) {
-        sprintf(pt_serial_out_buffer, "input a duty cycle (0-5000): ");
+        sprintf(pt_serial_out_buffer, "input a duty cycle (0-25000): ");
         serial_write ;
         // spawn a thread to do the non-blocking serial read
         serial_read ;
         // convert input string to number
         sscanf(pt_serial_in_buffer,"%d", &test_in) ;
-        if (test_in > 5000) continue ;
+        if (test_in > 25000) continue ;
         else if (test_in < 0) continue ;
         else control = test_in ;
     }
@@ -70,17 +59,16 @@ static PT_THREAD (protothread_serial(struct pt *pt))
 
 int main() {
 
-    // Initialize stdio
     stdio_init_all();
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// PWM CONFIGURATION ////////////////////////////
     ////////////////////////////////////////////////////////////////////////
-    // Tell GPIO PWM_OUT that it is allocated to the PWM
-    gpio_set_function(PWM_OUT, GPIO_FUNC_PWM);
+    // Tell GPIO 4 that it is allocated to the PWM
+    gpio_set_function(4, GPIO_FUNC_PWM);
 
-    // Find out which PWM slice is connected to GPIO PWM_OUT (it's slice 2)
-    slice_num = pwm_gpio_to_slice_num(PWM_OUT);
+    // // Find out which PWM slice is connected to GPIO 4 (it's slice 2)
+    slice_num = pwm_gpio_to_slice_num(4);
 
     // Mask our slice's IRQ output into the PWM block's single interrupt line,
     // and register our interrupt handler
@@ -93,11 +81,15 @@ int main() {
     pwm_set_wrap(slice_num, WRAPVAL) ;
     pwm_set_clkdiv(slice_num, CLKDIV) ;
 
+    // Invert channel B
+    pwm_set_output_polarity(slice_num, 0, 1)
+
     // This sets duty cycle
-    pwm_set_chan_level(slice_num, PWM_CHAN_A, 3125);
+    pwm_set_chan_level(slice_num, PWM_CHAN_B, 3125);
 
     // Start the channel
     pwm_set_mask_enabled((1u << slice_num));
+
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////////// ROCK AND ROLL ////////////////////////////
