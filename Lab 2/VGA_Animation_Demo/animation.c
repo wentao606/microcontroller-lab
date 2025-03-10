@@ -496,13 +496,14 @@ static PT_THREAD (protothread_anim_ball(struct pt *pt))
       // erase boid
       for (int i = 0; i < ball_num_set; i++){
         if (i < ball_num_set) {
-          // fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, BLACK);
+          
           drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), BLACK);
           drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y), BLACK);
           drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y)+1, BLACK);
           drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y)+1, BLACK);
+          
           ballPegCollision(&ball_coordinate[i].x, &ball_coordinate[i].y, &ball_coordinate[i].vx, &ball_coordinate[i].vy);
-          // fillCircle(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), 4, color);
+          
           drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y), color);
           drawPixel(fix2int15(ball_coordinate[i].x)+1, fix2int15(ball_coordinate[i].y), color);
           drawPixel(fix2int15(ball_coordinate[i].x), fix2int15(ball_coordinate[i].y)+1, color);
@@ -749,7 +750,7 @@ int main(){
   multicore_launch_core1(&core1_main);
 
   // add threads
-  // pt_add_thread(protothread_serial);
+  
   pt_add_thread(protothread_anim_ball);
 
   // start scheduler
