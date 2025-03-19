@@ -65,13 +65,18 @@ uint slice_num ;
 fix15 accel_angle;
 fix15 gyro_angle_delta;
 fix15 complementary_angle;
-fix15 reference_angle = 30;
-fix15 Kp;
+fix15 reference_angle = int2fix15(30);
+fix15 Kp, kd;
 fix15 previous_a [3];
 fix15 filteredax = float2fix15(0.);
 fix15 filtereday = float2fix15(0.);
 fix15 filteredaz = float2fix15(0.);
 float PI=3.14;
+// PWM duty cycle
+volatile float kp_value = 30. ;
+volatile float old_kp_value = 0.;
+volatile fix15 pwm_control;
+volatile fix15 error;
 
 // Interrupt service routine
 void on_pwm_wrap() {
@@ -104,7 +109,7 @@ void on_pwm_wrap() {
     // NO SMALL ANGLE APPROXIMATION_
     
     accel_angle = multfix15(float2fix15(atan2(fix2float15(-filtereday), fix2float15(filteredaz)) + PI), oneeightyoverpi);
-
+    
     // Gyro angle delta (measurement times timestep) (15.16 fixed point)
     // gyro_angle_delta = multfix15(gyro[1], zeropt001) ;
     gyro_angle_delta = multfix15(gyro[1], float2fix15(0.5)) ;
@@ -117,8 +122,36 @@ void on_pwm_wrap() {
     // Increase the range of the angle
     //complementary_angle = multfix15(complementary_angle, float2fix15(1.6));
     // Proportional control
-    //complementary_angle = multfix15(Kp, (complementary_angle-reference_angle));
-    printf("angle:%f\n", fix2float15(complementary_angle));
+    // if (kp_value != old_kp_value){
+    //     old_kp_value = kp_value;
+    //     pwm_control = multfix15(float2fix15(kp_value), (reference_angle-complementary_angle));
+    //     //printf("pwm duty cycle:%d, angle:%f\n",fix2int15(pwm_control), fix2float15(complementary_angle));
+    //     if (pwm_control < int2fix15(0)) {
+    //         pwm_control = int2fix15(0);
+    //     }
+    //     else if (pwm_control > int2fix15(5000)){
+    //         pwm_control = int2fix15(5000);
+    //     }
+    //     pwm_set_chan_level(slice_num, PWM_CHAN_A, fix2int15(pwm_control));
+    // //     printf("pwm duty cycle:%d, angle:%f\n",fix2int15(pwm_control), fix2float15(complementary_angle));
+    // }
+    
+    pwm_control = multfix15(float2fix15(kp_value), (reference_angle-complementary_angle));
+
+
+    if (pwm_control < int2fix15(0)) {
+            pwm_control = int2fix15(0);
+        }
+    else if (pwm_control > int2fix15(5000)){
+        pwm_control = int2fix15(5000);
+    }
+    //printf("pwm duty cycle:%d, angle:%f\n",fix2int15(pwm_control), fix2float15(complementary_angle));
+    pwm_set_chan_level(slice_num, PWM_CHAN_A, fix2int15(pwm_control));
+    
+    
+   
+    
+    // printf("angle:%f\n", fix2float15(complementary_angle));
     // Signal VGA to draw
     PT_SEM_SIGNAL(pt, &vga_semaphore);
 }
@@ -221,27 +254,28 @@ static PT_THREAD (protothread_serial(struct pt *pt))
 {
     PT_BEGIN(pt) ;
     static char classifier ;
-    static int test_in ;
-    static float float_in ;
+    static float test_in ;
+    
     while(1) {
-        sprintf(pt_serial_out_buffer, "input a command: ");
+        sprintf(pt_serial_out_buffer, "input Kp value (0-60): ");
         serial_write ;
         // spawn a thread to do the non-blocking serial read
         serial_read ;
         // convert input string to number
-        sscanf(pt_serial_in_buffer,"%c", &classifier) ;
+        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+        kp_value = test_in;
 
         // num_independents = test_in ;
-        if (classifier=='t') {
-            sprintf(pt_serial_out_buffer, "timestep: ");
-            serial_write ;
-            serial_read ;
-            // convert input string to number
-            sscanf(pt_serial_in_buffer,"%d", &test_in) ;
-            if (test_in > 0) {
-                threshold = test_in ;
-            }
-        }
+        // if (classifier=='t') {
+        //     sprintf(pt_serial_out_buffer, "timestep: ");
+        //     serial_write ;
+        //     serial_read ;
+        //     // convert input string to number
+        //     sscanf(pt_serial_in_buffer,"%d", &test_in) ;
+        //     if (test_in > 0) {
+        //         threshold = test_in ;
+        //     }
+        // }
     }
     PT_END(pt) ;
 }
