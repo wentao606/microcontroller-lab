@@ -58,6 +58,8 @@ int threshold = 10 ;
 // semaphore
 static struct pt_sem vga_semaphore ;
 
+static char text1[40];
+
 // Some paramters for PWM
 #define WRAPVAL 5000
 #define CLKDIV  25.0
@@ -65,7 +67,7 @@ uint slice_num ;
 fix15 accel_angle;
 fix15 gyro_angle_delta;
 fix15 complementary_angle;
-fix15 reference_angle = int2fix15(30);
+fix15 reference_angle = int2fix15(-30);
 fix15 Kp, kd;
 fix15 previous_a [3];
 fix15 filteredax = float2fix15(0.);
@@ -75,8 +77,19 @@ float PI=3.14;
 // PWM duty cycle
 volatile float kp_value = 30. ;
 volatile float old_kp_value = 0.;
+volatile float kd_value = 1000.0;
+volatile float ki_value = 1.0/32.0;
+volatile fix15 i_term;
 volatile fix15 pwm_control;
+volatile fix15 filter_pwm;
+volatile fix15 prev_pwm_control;
 volatile fix15 error;
+volatile fix15 prev_error;
+volatile float prev_time;
+volatile float curr_time;
+volatile float delta_time;
+
+
 
 // Interrupt service routine
 void on_pwm_wrap() {
@@ -89,9 +102,8 @@ void on_pwm_wrap() {
     // If you want these values in floating point, call fix2float15() on
     // the raw measurements.
     mpu6050_read_raw(acceleration, gyro);
-    //angle += gyro[0];
-    //printf( "angle:%f, %f, %f\n", fix2float15(gyro[0]), fix2float15(gyro[1]), fix2float15(gyro[2]) );
-    
+
+    // filter the acceleration reading values
     filteredax = previous_a[0] + ((acceleration[0]-previous_a[0])>>4);
     filtereday = previous_a[1] + ((acceleration[1]-previous_a[1])>>4);
     filteredaz = previous_a[2] + ((acceleration[2]-previous_a[2])>>4);
@@ -104,23 +116,17 @@ void on_pwm_wrap() {
     // Accelerometer angle (degrees - 15.16 fixed point) 
     // Only ONE of the two lines below will be used, depending whether or not a small angle approximation is appropriate
 
-    // SMALL ANGLE APPROXIMATION
-    //accel_angle = multfix15(divfix(acceleration[1], acceleration[2]), oneeightyoverpi) ;
     // NO SMALL ANGLE APPROXIMATION_
-    
     accel_angle = multfix15(float2fix15(atan2(fix2float15(-filtereday), fix2float15(filteredaz)) + PI), oneeightyoverpi);
     
     // Gyro angle delta (measurement times timestep) (15.16 fixed point)
     // gyro_angle_delta = multfix15(gyro[1], zeropt001) ;
     gyro_angle_delta = multfix15(gyro[1], float2fix15(0.5)) ;
     // Complementary angle (degrees - 15.16 fixed point)
-    // complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) 
-    //                     + multfix15(accel_angle, zeropt001);
+    
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, float2fix15(0.01)) 
                         + multfix15(accel_angle, float2fix15(0.99));
-    complementary_angle = (complementary_angle > float2fix15(180))?(complementary_angle-float2fix15(360)):complementary_angle;
-    // Increase the range of the angle
-    //complementary_angle = multfix15(complementary_angle, float2fix15(1.6));
+    complementary_angle = (complementary_angle > float2fix15(180))?(complementary_angle-float2fix15(360+10)):complementary_angle;
     // Proportional control
     // if (kp_value != old_kp_value){
     //     old_kp_value = kp_value;
@@ -136,22 +142,33 @@ void on_pwm_wrap() {
     // //     printf("pwm duty cycle:%d, angle:%f\n",fix2int15(pwm_control), fix2float15(complementary_angle));
     // }
     
-    pwm_control = multfix15(float2fix15(kp_value), (reference_angle-complementary_angle));
-
-
+    error = (reference_angle-complementary_angle);
+    // convert error to radius
+    error = divfix(error, oneeightyoverpi);
+    curr_time = time_us_32();
+    delta_time = (curr_time - prev_time) * (1e-6);
+    i_term += multfix15(error, float2fix15(delta_time));
+    pwm_control = multfix15(float2fix15(kp_value), error)\
+                + multfix15(float2fix15(kd_value), divfix(error-prev_error, float2fix15(delta_time)))\
+                + multfix15(float2fix15(ki_value), i_term);
+    // pwm_control = multfix15(float2fix15(kp_value), error);
+    
+    // PD CONTROL
+    
     if (pwm_control < int2fix15(0)) {
             pwm_control = int2fix15(0);
         }
-    else if (pwm_control > int2fix15(5000)){
-        pwm_control = int2fix15(5000);
+    else if (pwm_control > int2fix15(3500)){
+        pwm_control = int2fix15(4500);
     }
-    //printf("pwm duty cycle:%d, angle:%f\n",fix2int15(pwm_control), fix2float15(complementary_angle));
+    // printf("delta time:%f, error:%f, i_term:%f\n",delta_time, \
+    //         fix2float15(error),\
+    //         fix2float15(i_term))  ;
+
     pwm_set_chan_level(slice_num, PWM_CHAN_A, fix2int15(pwm_control));
+    prev_error = error;
+    prev_time = curr_time;
     
-    
-   
-    
-    // printf("angle:%f\n", fix2float15(complementary_angle));
     // Signal VGA to draw
     PT_SEM_SIGNAL(pt, &vga_semaphore);
 }
@@ -166,10 +183,10 @@ static PT_THREAD (protothread_vga(struct pt *pt))
     static int xcoord = 81 ;
     
     // Rescale the measurements for display
-    static float OldRange = 360. ; // (+/- 180)
+    static float OldRange = 200. ; // (+/- 180)
     static float NewRange = 150. ; // (looks nice on VGA)
-    static float OldMin = -180. ;
-    static float OldMax = 180. ;
+    static float OldMin = -100. ;
+    static float OldMax = 100. ;
 
     // Control rate of drawing
     static int throttle ;
@@ -183,13 +200,13 @@ static PT_THREAD (protothread_vga(struct pt *pt))
     drawHLine(75, 355, 5, CYAN) ;
     drawHLine(75, 280, 5, CYAN) ;
     drawVLine(80, 280, 150, CYAN) ;
-    sprintf(screentext, "0") ;
+    sprintf(screentext, "") ;
     setCursor(50, 350) ;
     writeString(screentext) ;
-    sprintf(screentext, "+2") ;
+    sprintf(screentext, "+5000") ;
     setCursor(50, 280) ;
     writeString(screentext) ;
-    sprintf(screentext, "-2") ;
+    sprintf(screentext, "0") ;
     setCursor(50, 425) ;
     writeString(screentext) ;
 
@@ -201,10 +218,10 @@ static PT_THREAD (protothread_vga(struct pt *pt))
     sprintf(screentext, "0") ;
     setCursor(50, 150) ;
     writeString(screentext) ;
-    sprintf(screentext, "+250") ;
+    sprintf(screentext, "+100") ;
     setCursor(45, 75) ;
     writeString(screentext) ;
-    sprintf(screentext, "-250") ;
+    sprintf(screentext, "-100") ;
     setCursor(45, 225) ;
     writeString(screentext) ;
     
@@ -219,21 +236,61 @@ static PT_THREAD (protothread_vga(struct pt *pt))
             // Zero drawspeed controller
             throttle = 0 ;
 
-            // Erase a column
+            
             drawVLine(xcoord, 0, 480, BLACK) ;
 
             // Draw bottom plot (multiply by 120 to scale from +/-2 to +/-250)
-            drawPixel(xcoord, 430 - (int)(NewRange*((float)((fix2float15(filteredax)*120.0)-OldMin)/OldRange)), WHITE) ;
-            drawPixel(xcoord, 430 - (int)(NewRange*((float)((fix2float15(filtereday)*120.0)-OldMin)/OldRange)), RED) ;
-            drawPixel(xcoord, 430 - (int)(NewRange*((float)((fix2float15(filteredaz)*120.0)-OldMin)/OldRange)), GREEN) ;
+            // drawPixel(xcoord, 430 - (int)(NewRange*((float)((fix2float15(filteredax)*120.0)-OldMin)/OldRange)), WHITE) ;
+            // drawPixel(xcoord, 430 - (int)(NewRange*((float)((fix2float15(filtereday)*120.0)-OldMin)/OldRange)), RED) ;
+            // drawPixel(xcoord, 430 - (int)(NewRange*((float)((fix2float15(filteredaz)*120.0)-OldMin)/OldRange)), GREEN) ;
+            
+            // Draw the bottom plot
 
+            // Low-pass filter for pwm signal only when displaying
+            filter_pwm = prev_pwm_control + ((pwm_control - prev_pwm_control )>> 4);
+            prev_pwm_control = filter_pwm;
+            drawPixel(xcoord, 430 - (int)(150*((float)((fix2float15(filter_pwm))/5000.0))), GREEN);
+            
             // Draw top plot
             drawPixel(xcoord, 230 - (int)(NewRange*((float)((fix2float15(complementary_angle))-OldMin)/OldRange)), WHITE) ;
             drawPixel(xcoord, 230 - (int)(NewRange*((float)((fix2float15(complementary_angle))-OldMin)/OldRange)), RED) ;
             drawPixel(xcoord, 230 - (int)(NewRange*((float)((fix2float15(complementary_angle))-OldMin)/OldRange)), GREEN) ;
+            
+            // display desired angle
+            sprintf(text1, "desired angle: %f   ", fix2float15(reference_angle));
+            setCursor(10, 10);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
 
-            //angle += (230 - NewRange*((float)((fix2float15(gyro[0]))-OldMin)/OldRange));
-            //printf( "gyro: %f, angle:%f\n", fix2float15(gyro[0]), angle);
+            // display desired angle
+            sprintf(text1, "actual angle: %f   ", fix2float15(complementary_angle));
+            setCursor(10, 20);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+
+            // display kp
+            sprintf(text1, "Kp: %f   ", kp_value);
+            setCursor(10, 30);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+            
+            // display kd
+            sprintf(text1, "Kd: %f   ", kd_value);
+            setCursor(10, 40);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+
+            //display ki
+            sprintf(text1, "Ki: %f   ", ki_value);
+            setCursor(10, 50);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+            
             
 
             // Update horizontal cursor
@@ -257,7 +314,17 @@ static PT_THREAD (protothread_serial(struct pt *pt))
     static float test_in ;
     
     while(1) {
-        sprintf(pt_serial_out_buffer, "input Kp value (0-60): ");
+        // Type in desired angle
+        sprintf(pt_serial_out_buffer, "desired angle in degree: ");
+        serial_write ;
+        // spawn a thread to do the non-blocking serial read
+        serial_read ;
+        // convert input string to number
+        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+        reference_angle = float2fix15(test_in);
+        
+        // Type in kp value
+        sprintf(pt_serial_out_buffer, "input Kp value: ");
         serial_write ;
         // spawn a thread to do the non-blocking serial read
         serial_read ;
@@ -265,17 +332,24 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         sscanf(pt_serial_in_buffer,"%f", &test_in) ;
         kp_value = test_in;
 
-        // num_independents = test_in ;
-        // if (classifier=='t') {
-        //     sprintf(pt_serial_out_buffer, "timestep: ");
-        //     serial_write ;
-        //     serial_read ;
-        //     // convert input string to number
-        //     sscanf(pt_serial_in_buffer,"%d", &test_in) ;
-        //     if (test_in > 0) {
-        //         threshold = test_in ;
-        //     }
-        // }
+        // Type in kd value
+        sprintf(pt_serial_out_buffer, "input Kd value: ");
+        serial_write ;
+        // spawn a thread to do the non-blocking serial read
+        serial_read ;
+        // convert input string to number
+        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+        kd_value = test_in;
+
+        //Type in ki value
+        sprintf(pt_serial_out_buffer, "input Ki value: ");
+        serial_write ;
+        // spawn a thread to do the non-blocking serial read
+        serial_read ;
+        // convert input string to number
+        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+        ki_value = test_in;
+
     }
     PT_END(pt) ;
 }
@@ -325,7 +399,8 @@ int main() {
     pwm_set_irq_enabled(slice_num, true);
     irq_set_exclusive_handler(PWM_IRQ_WRAP, on_pwm_wrap);
     irq_set_enabled(PWM_IRQ_WRAP, true);
-
+    // Invert channel A
+    pwm_set_output_polarity(slice_num, 1, 0);
     // This section configures the period of the PWM signals
     pwm_set_wrap(slice_num, WRAPVAL) ;
     pwm_set_clkdiv(slice_num, CLKDIV) ;
