@@ -64,7 +64,7 @@ static char text1[40];
 #define WRAPVAL 5000
 #define CLKDIV  25.0
 // Button gpio 
-#define BUTTON_PIN 3
+#define BUTTON_PIN 28
 
 typedef enum {
     RESET,
