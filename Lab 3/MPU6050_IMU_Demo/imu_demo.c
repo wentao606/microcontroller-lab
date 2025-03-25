@@ -493,6 +493,10 @@ int main() {
     // gpio_pull_up(SCL_PIN) ;
 
     // MPU6050 initialization
+      // initialize button gpio
+    gpio_init(BUTTON_PIN);
+    gpio_set_dir(BUTTON_PIN, GPIO_IN);
+
     mpu6050_reset();
     mpu6050_read_raw(acceleration, gyro);
 
@@ -539,6 +543,7 @@ int main() {
 
     // start core 0
     pt_add_thread(protothread_serial) ;
+    pt_add_thread(protothread_button);
     pt_schedule_start ;
 
 }
