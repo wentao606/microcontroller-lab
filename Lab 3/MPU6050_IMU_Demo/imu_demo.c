@@ -445,6 +445,9 @@ static PT_THREAD (protothread_serial(struct pt *pt))
     PT_END(pt) ;
 }
 
+int flag = 0;
+int time = 0;
+int seq = 0;
 static PT_THREAD (protothread_button(struct pt *pt))
 {
     // Mark beginning of thread
@@ -456,7 +459,10 @@ static PT_THREAD (protothread_button(struct pt *pt))
         if (button_control != button_control_prev) {
             button_control_prev = button_control;
             if (button_control == 0) {
-                run_sequence();
+                flag = 1;
+                time = time_32_us();
+                seq = 0;
+                reference_angle = int2fix15(0);
             }
             else if (button_control == 1) {
                 reference_angle = -90;
@@ -467,6 +473,36 @@ static PT_THREAD (protothread_button(struct pt *pt))
     PT_END(pt);
 }
 
+static PT_THREAD (protothread_run_sequence(struct pt *pt))
+{
+    // Mark beginning of thread
+    PT_BEGIN(pt);
+    while (1) {
+        if (flag) {
+            if (seq == 0 && time_us_32() - time >= 5000000) {
+                seq ++;
+                time = time_us_32();
+                reference_angle = int2fix15(30);
+            }
+            else if (seq == 1 && time_us_32() - time >= 5000000) {
+                seq ++;
+                time = time_us_32();
+                reference_angle = int2fix15(-30);
+            }
+            else if (seq == 2 && time_us_32() - time >= 5000000) {
+                seq ++;
+                time = time_us_32();
+                reference_angle = int2fix15(0);
+            }
+            else if (seq == 3) {
+                flag = 0;
+            }
+        }
+        // yield for necessary amount of time
+        PT_YIELD_usec(5000);
+    }
+    PT_END(pt);
+}
 
 // Entry point for core 1
 void core1_entry() {
