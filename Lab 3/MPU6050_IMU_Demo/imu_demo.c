@@ -63,6 +63,22 @@ static char text1[40];
 // Some paramters for PWM
 #define WRAPVAL 5000
 #define CLKDIV  25.0
+// Button gpio 
+#define BUTTON_PIN 3
+
+typedef enum {
+    RESET,
+    BUTTON_NOT_PRESSED,
+    BUTTON_MAYBE_PRESSED,
+    BUTTON_PRESSED,
+    BUTTON_MAYBE_NOT_PRESSED
+} ButtonState;
+static ButtonState button_state = RESET;
+static int button_value = -1;
+static int possible = -1;
+static int button_control = 0;
+static int button_control_prev = 0;
+
 uint slice_num ;
 fix15 accel_angle;
 fix15 gyro_angle_delta;
@@ -89,7 +105,82 @@ volatile float prev_time;
 volatile float curr_time;
 volatile float delta_time;
 
+void button_pressing()
+{
+    switch (button_state)
+    {
 
+    case RESET:
+        button_value = gpio_get(BUTTON_PIN);
+        button_control = 0;
+        button_state = BUTTON_NOT_PRESSED;
+    break;
+
+    case BUTTON_NOT_PRESSED:
+        if (button_value == 0){
+            button_value = gpio_get(BUTTON_PIN);
+            button_state = BUTTON_NOT_PRESSED;
+        }
+    else{
+        possible = button_value;
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_MAYBE_PRESSED;
+    }
+    break;
+
+    case BUTTON_MAYBE_PRESSED:
+    if (button_value == possible){
+        button_value = gpio_get(BUTTON_PIN);
+        button_control = 1;
+        button_state = BUTTON_PRESSED;
+    }
+    else{
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_NOT_PRESSED;
+    }
+    break;
+    case BUTTON_PRESSED:
+    if (button_value == possible){
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_PRESSED;
+        }
+    else{
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_MAYBE_NOT_PRESSED;
+    }
+    case BUTTON_MAYBE_NOT_PRESSED:
+    if (button_value == possible) {
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_PRESSED;
+    }
+    else {
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_NOT_PRESSED;
+    }
+    break;
+
+    default:
+    button_value = -1;
+    possible = -1;
+    break;
+
+    }
+}
+
+static int t = 0;
+void run_sequence() {
+    reference_angle = int2fix15(0);
+    t = time_us_32();
+    while (!((t - time_us_32()) > 5000));
+    reference_angle = divfix(int2fix15(30), oneeightyoverpi);
+    t = time_us_32();
+    while (!((t - time_us_32()) > 5000));
+    reference_angle = divfix(int2fix15(-30), oneeightyoverpi);
+    t = time_us_32();
+    while (!((t - time_us_32()) > 5000));
+    reference_angle = 0;
+    t = time_us_32();
+}
 
 // Interrupt service routine
 void on_pwm_wrap() {
@@ -353,6 +444,29 @@ static PT_THREAD (protothread_serial(struct pt *pt))
     }
     PT_END(pt) ;
 }
+
+static PT_THREAD (protothread_button(struct pt *pt))
+{
+    // Mark beginning of thread
+    PT_BEGIN(pt);
+    while (1) {
+        begin_time = time_us_32();
+        button_pressing();
+        // reset state, set number of balls to max and reset histogram
+        if (button_control != button_control_prev) {
+            button_control_prev = button_control;
+            if (button_control == 0) {
+                run_sequence();
+            }
+            else if (button_control == 1) {
+                reference_angle = -90;
+            }
+        }
+        // yield for necessary amount of time
+    }
+    PT_END(pt);
+}
+
 
 // Entry point for core 1
 void core1_entry() {
