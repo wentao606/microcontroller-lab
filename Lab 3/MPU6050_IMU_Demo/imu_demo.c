@@ -83,7 +83,7 @@ uint slice_num ;
 fix15 accel_angle;
 fix15 gyro_angle_delta;
 fix15 complementary_angle;
-fix15 reference_angle = int2fix15(-30);
+fix15 reference_angle = int2fix15(60);
 fix15 Kp, kd;
 fix15 previous_a [3];
 fix15 filteredax = float2fix15(0.);
@@ -91,16 +91,18 @@ fix15 filtereday = float2fix15(0.);
 fix15 filteredaz = float2fix15(0.);
 float PI=3.14;
 // PWM duty cycle
-volatile float kp_value = 30. ;
+volatile float kp_value = 50. ;
 volatile float old_kp_value = 0.;
-volatile float kd_value = 1000.0;
-volatile float ki_value = 1.0/32.0;
-volatile fix15 i_term;
-volatile fix15 pwm_control;
-volatile fix15 filter_pwm;
-volatile fix15 prev_pwm_control;
-volatile fix15 error;
-volatile fix15 prev_error;
+volatile float kd_value = 1.0;
+volatile float ki_value = 0.03;
+volatile float ki_value_set = 0.03;
+volatile float i_term;
+volatile int pwm_control;
+volatile int filter_pwm;
+volatile int prev_pwm_control;
+volatile float error;
+volatile float filter_error;
+volatile float prev_error;
 volatile float prev_time;
 volatile float curr_time;
 volatile float delta_time;
@@ -117,7 +119,9 @@ void button_pressing()
     break;
 
     case BUTTON_NOT_PRESSED:
+        button_control = 0;
         if (button_value == 0){
+            
             button_value = gpio_get(BUTTON_PIN);
             button_state = BUTTON_NOT_PRESSED;
         }
@@ -171,20 +175,26 @@ static int t = 0;
 void run_sequence() {
     reference_angle = int2fix15(0);
     t = time_us_32();
-    while (!((t - time_us_32()) > 5000));
-    reference_angle = divfix(int2fix15(30), oneeightyoverpi);
-    t = time_us_32();
-    while (!((t - time_us_32()) > 5000));
-    reference_angle = divfix(int2fix15(-30), oneeightyoverpi);
-    t = time_us_32();
-    while (!((t - time_us_32()) > 5000));
-    reference_angle = 0;
-    t = time_us_32();
+    
+    while(1){
+        if (time_us_32() - t > 5000000){
+            reference_angle = int2fix15(30);
+        }
+        else if (time_us_32() - t > 10000000)
+        {
+            reference_angle = int2fix15(-30);
+        }
+        else if (time_us_32() - t > 15000000)
+        {
+            reference_angle = int2fix15(0);
+        }
+    }
 }
-
+int k = 0;
+float buffer_kd[5];
 // Interrupt service routine
 void on_pwm_wrap() {
-
+    
     // Clear the interrupt flag that brought us here
     pwm_clear_irq(pwm_gpio_to_slice_num(5));
 
@@ -195,9 +205,9 @@ void on_pwm_wrap() {
     mpu6050_read_raw(acceleration, gyro);
 
     // filter the acceleration reading values
-    filteredax = previous_a[0] + ((acceleration[0]-previous_a[0])>>4);
-    filtereday = previous_a[1] + ((acceleration[1]-previous_a[1])>>4);
-    filteredaz = previous_a[2] + ((acceleration[2]-previous_a[2])>>4);
+    filteredax = filteredax + ((acceleration[0]-filteredax)>>2);
+    filtereday = filtereday + ((acceleration[1]-filtereday)>>2);
+    filteredaz = filteredaz + ((acceleration[2]-filteredaz)>>2);
     
     previous_a[0] = filteredax;
     previous_a[1] = filtereday;
@@ -208,56 +218,51 @@ void on_pwm_wrap() {
     // Only ONE of the two lines below will be used, depending whether or not a small angle approximation is appropriate
 
     // NO SMALL ANGLE APPROXIMATION_
-    accel_angle = multfix15(float2fix15(atan2(fix2float15(-filtereday), fix2float15(filteredaz)) + PI), oneeightyoverpi);
+    accel_angle = multfix15(float2fix15(atan2(fix2float15(filteredaz), fix2float15(filtereday))), oneeightyoverpi);
     
     // Gyro angle delta (measurement times timestep) (15.16 fixed point)
-    // gyro_angle_delta = multfix15(gyro[1], zeropt001) ;
-    gyro_angle_delta = multfix15(gyro[1], float2fix15(0.5)) ;
+    
+    gyro_angle_delta = multfix15(gyro[0], float2fix15(0.001)) ;
     // Complementary angle (degrees - 15.16 fixed point)
     
-    complementary_angle = multfix15(complementary_angle - gyro_angle_delta, float2fix15(0.01)) 
-                        + multfix15(accel_angle, float2fix15(0.99));
-    complementary_angle = (complementary_angle > float2fix15(180))?(complementary_angle-float2fix15(360+10)):complementary_angle;
-    // Proportional control
-    // if (kp_value != old_kp_value){
-    //     old_kp_value = kp_value;
-    //     pwm_control = multfix15(float2fix15(kp_value), (reference_angle-complementary_angle));
-    //     //printf("pwm duty cycle:%d, angle:%f\n",fix2int15(pwm_control), fix2float15(complementary_angle));
-    //     if (pwm_control < int2fix15(0)) {
-    //         pwm_control = int2fix15(0);
-    //     }
-    //     else if (pwm_control > int2fix15(5000)){
-    //         pwm_control = int2fix15(5000);
-    //     }
-    //     pwm_set_chan_level(slice_num, PWM_CHAN_A, fix2int15(pwm_control));
-    // //     printf("pwm duty cycle:%d, angle:%f\n",fix2int15(pwm_control), fix2float15(complementary_angle));
-    // }
+    complementary_angle = multfix15(complementary_angle - gyro_angle_delta, float2fix15(0.99)) 
+                        + multfix15(accel_angle, float2fix15(0.01));
     
-    error = (reference_angle-complementary_angle);
+    
+    if (complementary_angle > int2fix15(180))
+        complementary_angle = int2fix15(180);
+    else if (complementary_angle < int2fix15(0))
+        complementary_angle = int2fix15(0);
+
+    
+    
+    
+    prev_error = error;
+    error = fix2float15(reference_angle-complementary_angle) ;
     // convert error to radius
-    error = divfix(error, oneeightyoverpi);
+    filter_error = prev_error + ((error - prev_error) / 4);
+    
+    ki_value = ki_value_set;
     curr_time = time_us_32();
     delta_time = (curr_time - prev_time) * (1e-6);
-    i_term += multfix15(error, float2fix15(delta_time));
-    pwm_control = multfix15(float2fix15(kp_value), error)\
-                + multfix15(float2fix15(kd_value), divfix(error-prev_error, float2fix15(delta_time)))\
-                + multfix15(float2fix15(ki_value), i_term);
-    // pwm_control = multfix15(float2fix15(kp_value), error);
+    i_term += (1.0 * error);
+    if (i_term >= (3000.0 / ki_value_set))
+        i_term = 3000.0 / ki_value_set;
+    else if (i_term <= (-3000.0 / ki_value_set))
+        i_term = -3000.0 / ki_value_set;
+    pwm_control = ((kp_value * error)
+                + (kd_value * (error - prev_error))
+                + (ki_value * i_term));
     
-    // PD CONTROL
-    
-    if (pwm_control < int2fix15(0)) {
-            pwm_control = int2fix15(0);
+    if (pwm_control < 0) {
+            pwm_control = 0;
         }
-    else if (pwm_control > int2fix15(3500)){
-        pwm_control = int2fix15(4500);
+    else if (pwm_control > 3500){
+        pwm_control = 3500;
     }
-    // printf("delta time:%f, error:%f, i_term:%f\n",delta_time, \
-    //         fix2float15(error),\
-    //         fix2float15(i_term))  ;
-
-    pwm_set_chan_level(slice_num, PWM_CHAN_A, fix2int15(pwm_control));
-    prev_error = error;
+    
+    pwm_set_chan_level(slice_num, PWM_CHAN_A, (int)(pwm_control));
+    
     prev_time = curr_time;
     
     // Signal VGA to draw
@@ -274,10 +279,10 @@ static PT_THREAD (protothread_vga(struct pt *pt))
     static int xcoord = 81 ;
     
     // Rescale the measurements for display
-    static float OldRange = 200. ; // (+/- 180)
+    static float OldRange = 180. ; // (+/- 180)
     static float NewRange = 150. ; // (looks nice on VGA)
-    static float OldMin = -100. ;
-    static float OldMax = 100. ;
+    static float OldMin = 0. ;
+    static float OldMax = 180. ;
 
     // Control rate of drawing
     static int throttle ;
@@ -309,10 +314,10 @@ static PT_THREAD (protothread_vga(struct pt *pt))
     sprintf(screentext, "0") ;
     setCursor(50, 150) ;
     writeString(screentext) ;
-    sprintf(screentext, "+100") ;
+    sprintf(screentext, "+180") ;
     setCursor(45, 75) ;
     writeString(screentext) ;
-    sprintf(screentext, "-100") ;
+    sprintf(screentext, "0") ;
     setCursor(45, 225) ;
     writeString(screentext) ;
     
@@ -340,8 +345,11 @@ static PT_THREAD (protothread_vga(struct pt *pt))
             // Low-pass filter for pwm signal only when displaying
             filter_pwm = prev_pwm_control + ((pwm_control - prev_pwm_control )>> 4);
             prev_pwm_control = filter_pwm;
-            drawPixel(xcoord, 430 - (int)(150*((float)((fix2float15(filter_pwm))/5000.0))), GREEN);
+            drawPixel(xcoord, 430 - (int)(150*((float)(((float)(filter_pwm))/5000.0))), GREEN);
+            drawPixel(xcoord, 430 - (int)(150*((float)(((float)((kd_value * (error - prev_error))))/5000.0))), RED);
+            drawPixel(xcoord, 430 - (int)(150*((float)(((float)((ki_value * i_term)))/5000.0))), WHITE);
             
+            drawPixel(xcoord, 430 - (int)(150*((float)(((float)((kp_value * error)))/5000.0))), BLUE);
             // Draw top plot
             drawPixel(xcoord, 230 - (int)(NewRange*((float)((fix2float15(complementary_angle))-OldMin)/OldRange)), WHITE) ;
             drawPixel(xcoord, 230 - (int)(NewRange*((float)((fix2float15(complementary_angle))-OldMin)/OldRange)), RED) ;
@@ -382,6 +390,30 @@ static PT_THREAD (protothread_vga(struct pt *pt))
             setTextSize(1);
             writeString(text1);
             
+            sprintf(text1, "p term: %f    ", kp_value * error);
+            setCursor(200, 10);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+            
+            sprintf(text1, "d term: %f    ", (kd_value * (error - prev_error)));
+            setCursor(200, 20);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+
+            sprintf(text1, "i term: %f    ", (ki_value * i_term));
+            setCursor(200, 30);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+
+            sprintf(text1, "pwm: %d    ", (pwm_control));
+            setCursor(200, 40);
+            setTextColor2(WHITE, BLACK);
+            setTextSize(1);
+            writeString(text1);
+
             
 
             // Update horizontal cursor
@@ -394,81 +426,100 @@ static PT_THREAD (protothread_vga(struct pt *pt))
         }
     }
     // Indicate end of thread
+    PT_YIELD_usec(40000);
     PT_END(pt);
 }
 
 // User input thread. User can change draw speed
+
 static PT_THREAD (protothread_serial(struct pt *pt))
 {
     PT_BEGIN(pt) ;
     static char classifier ;
     static float test_in ;
+    static char cmd;
     
     while(1) {
-        // Type in desired angle
-        sprintf(pt_serial_out_buffer, "desired angle in degree: ");
+        sprintf(pt_serial_out_buffer, "what to change?: ");
         serial_write ;
-        // spawn a thread to do the non-blocking serial read
         serial_read ;
-        // convert input string to number
-        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
-        reference_angle = float2fix15(test_in);
-        
-        // Type in kp value
-        sprintf(pt_serial_out_buffer, "input Kp value: ");
-        serial_write ;
-        // spawn a thread to do the non-blocking serial read
-        serial_read ;
-        // convert input string to number
-        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
-        kp_value = test_in;
-
-        // Type in kd value
-        sprintf(pt_serial_out_buffer, "input Kd value: ");
-        serial_write ;
-        // spawn a thread to do the non-blocking serial read
-        serial_read ;
-        // convert input string to number
-        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
-        kd_value = test_in;
-
-        //Type in ki value
-        sprintf(pt_serial_out_buffer, "input Ki value: ");
-        serial_write ;
-        // spawn a thread to do the non-blocking serial read
-        serial_read ;
-        // convert input string to number
-        sscanf(pt_serial_in_buffer,"%f", &test_in) ;
-        ki_value = test_in;
+        sscanf(pt_serial_in_buffer,"%c", &cmd) ;
+        switch (cmd) {
+            case 'a':
+                sprintf(pt_serial_out_buffer, "desired angle in degree: ");
+                serial_write ;
+                // spawn a thread to do the non-blocking serial read
+                serial_read ;
+                // convert input string to number
+                sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+                reference_angle = float2fix15(test_in);
+                break;
+            case 'i':
+                //Type in ki value
+                sprintf(pt_serial_out_buffer, "input Ki value: ");
+                serial_write ;
+                // spawn a thread to do the non-blocking serial read
+                serial_read ;
+                // convert input string to number
+                sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+                ki_value_set = test_in;
+                break;
+            case 'p':
+                // Type in kp value
+                sprintf(pt_serial_out_buffer, "input Kp value: ");
+                serial_write ;
+                // spawn a thread to do the non-blocking serial read
+                serial_read ;
+                // convert input string to number
+                sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+                kp_value = test_in;
+                break;
+            case 'd':
+                // Type in kd value
+                sprintf(pt_serial_out_buffer, "input Kd value: ");
+                serial_write ;
+                // spawn a thread to do the non-blocking serial read
+                serial_read ;
+                // convert input string to number
+                sscanf(pt_serial_in_buffer,"%f", &test_in) ;
+                kd_value = test_in;
+                break;
+            default:
+                sprintf(pt_serial_out_buffer, "not correct command ");
+                serial_write ;
+                break;
+        }
 
     }
     PT_END(pt) ;
 }
+static int time = 0;
+static int flag = 0;
+static int seq = 0;
 
-int flag = 0;
-int time = 0;
-int seq = 0;
 static PT_THREAD (protothread_button(struct pt *pt))
 {
     // Mark beginning of thread
     PT_BEGIN(pt);
     while (1) {
-        begin_time = time_us_32();
+        
         button_pressing();
         // reset state, set number of balls to max and reset histogram
         if (button_control != button_control_prev) {
+            // printf("button:%d,%d\n", button_control, button_control_prev);
             button_control_prev = button_control;
             if (button_control == 0) {
-                flag = 1;
-                time = time_32_us();
-                seq = 0;
-                reference_angle = int2fix15(0);
+               flag = 1;
+               seq = 0;
+               time = time_us_32();
+               reference_angle = int2fix15(90);
             }
             else if (button_control == 1) {
-                reference_angle = -90;
+                reference_angle = divfix(int2fix15(0), oneeightyoverpi);
             }
         }
         // yield for necessary amount of time
+        PT_YIELD_usec(40000);
     }
     PT_END(pt);
 }
@@ -482,17 +533,17 @@ static PT_THREAD (protothread_run_sequence(struct pt *pt))
             if (seq == 0 && time_us_32() - time >= 5000000) {
                 seq ++;
                 time = time_us_32();
-                reference_angle = int2fix15(30);
+                reference_angle = int2fix15(120);
             }
             else if (seq == 1 && time_us_32() - time >= 5000000) {
                 seq ++;
                 time = time_us_32();
-                reference_angle = int2fix15(-30);
+                reference_angle = int2fix15(60);
             }
             else if (seq == 2 && time_us_32() - time >= 5000000) {
                 seq ++;
                 time = time_us_32();
-                reference_angle = int2fix15(0);
+                reference_angle = int2fix15(90);
             }
             else if (seq == 3) {
                 flag = 0;
@@ -504,9 +555,12 @@ static PT_THREAD (protothread_run_sequence(struct pt *pt))
     PT_END(pt);
 }
 
+
 // Entry point for core 1
 void core1_entry() {
     pt_add_thread(protothread_vga) ;
+    pt_add_thread(protothread_button);
+    pt_add_thread(protothread_run_sequence);
     pt_schedule_start ;
 }
 
@@ -529,7 +583,7 @@ int main() {
     // gpio_pull_up(SCL_PIN) ;
 
     // MPU6050 initialization
-      // initialize button gpio
+    // initialize button gpio
     gpio_init(BUTTON_PIN);
     gpio_set_dir(BUTTON_PIN, GPIO_IN);
 
@@ -579,7 +633,7 @@ int main() {
 
     // start core 0
     pt_add_thread(protothread_serial) ;
-    pt_add_thread(protothread_button);
+    
     pt_schedule_start ;
 
 }
