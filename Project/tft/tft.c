@@ -16,6 +16,9 @@
 #define size 1
 #define FRAME_RATE 33000
 #define BUTTON_PIN 14
+#define WIDTH 240
+#define HEIGHT 320
+#define MAX_ITER 2000
 
 static unsigned char cell_array[240/size][320/size] ;
 static char cell_array_next[240/size][320/size] ;
@@ -34,6 +37,42 @@ int button_value = -1;
 static int possible = -1;
 static int button_control = 0;
 static int button_control_prev = 0;
+float x[WIDTH] = {0};
+float y[HEIGHT] = {0};
+
+void mandelbrot() {
+    if(button_control == 2) {
+        tft_fillScreen(ILI9340_BLACK);
+    
+        float Zre, Zim, Cre, Cim ;
+        float Zre_sq, Zim_sq ;
+        int n, i, j ;
+        for (i = 0; i < WIDTH; ++i) {
+            for (j = 0; j < HEIGHT; ++j) {
+                Zre = Zim = Zre_sq = Zim_sq = 0;
+                Cre = x[i] ;
+                Cim = y[j] ;
+                n = 0 ;
+                while (Zre_sq + Zim_sq < 4 && n < MAX_ITER) {
+                    Zim = 2 * Zre * Zim + Cim;
+                    Zre = Zre_sq - Zim_sq + Cre;
+                    Zre_sq = Zre * Zre;
+                    Zim_sq = Zim * Zim;
+                    n++;
+                    // printf("n: %d\n", n);
+                }
+                if (n >= MAX_ITER) tft_drawPixel(i, j, ILI9340_BLACK) ;
+                else if (n >= (MAX_ITER>>1)) tft_drawPixel(i, j, ILI9340_WHITE) ;
+                else if (n >= (MAX_ITER>>2)) tft_drawPixel(i, j, ILI9340_YELLOW) ;
+                else if (n >= (MAX_ITER>>3)) tft_drawPixel(i, j, ILI9340_MAGENTA) ;
+                else if (n >= (MAX_ITER>>4)) tft_drawPixel(i, j, ILI9340_RED) ;
+                else if (n >= (MAX_ITER>>5)) tft_drawPixel(i, j, ILI9340_BLUE) ;
+                else if (n >= (MAX_ITER>>6)) tft_drawPixel(i, j, ILI9340_MAGENTA) ;
+                else tft_drawPixel(i, j, ILI9340_CYAN) ;
+            }
+        }
+    }
+}
 
 void button_pressing()
 {
@@ -47,7 +86,6 @@ void button_pressing()
 
     case BUTTON_NOT_PRESSED:
         if (button_value == 0){
-            
             button_value = gpio_get(BUTTON_PIN);
             button_state = BUTTON_NOT_PRESSED;
         }
@@ -306,9 +344,7 @@ void update_cell(){
 
 //     first_generation();
 //     while(1){
-       
 //         update_alive();
-       
 //         PT_YIELD_usec(1000) ;
 //     }
 //     PT_END(pt);
@@ -334,8 +370,10 @@ static PT_THREAD (protothread_anim(struct pt *pt))
             memset(cell_array, 0, sizeof(cell_array));
             memset(cell_array_next, 0, sizeof(cell_array_next));
             start_init = 1;
+            if(button_control == 2)
+                mandelbrot();
         }
-        printf("button_control: %d\n", button_control);
+        // printf("button_control: %d\n", button_control);
         pi_initial();
         random_initial();
         update_alive();
@@ -366,10 +404,10 @@ static PT_THREAD (protothread_btn(struct pt *pt))
 
 void core1_main(){
   // Add animation thread
-  pt_add_thread(protothread_anim);
-  
+    pt_add_thread(protothread_anim);
 
-  pt_schedule_start ;
+
+    pt_schedule_start ;
 
 }
 
@@ -385,6 +423,17 @@ int main(){
     tft_init_hw(); //Initialize the hardware for the TFT
     tft_begin(); //Initialize the TFT
     tft_fillScreen(ILI9340_BLACK); //Fill the entire screen with black colour
+    // initialize the array 
+    float x_min = -2.0, x_max = 1.0;
+    float y_min = -2.0, y_max = 1.0;
+    for (int i = 0; i < WIDTH; i++) {
+        x[i] = x_min + (x_max - x_min) * i / (WIDTH - 1);
+    }
+    
+    for (int i = 0; i < HEIGHT; i++) {
+        y[i] = y_min + (y_max - y_min) * i / (HEIGHT - 1);
+    }
+
 
       // start core 1 
     multicore_reset_core1();
