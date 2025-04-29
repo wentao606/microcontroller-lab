@@ -9,6 +9,9 @@
 #include "hardware/pwm.h" //The hardware PWM library
 #include "hardware/pio.h" //The hardware PIO library
 #include "TFTMaster.h" //The TFT Master library
+#include "hardware/dma.h"
+#include "hardware/spi.h" //The hardware SPI library
+#include "hardware/sync.h"
 // Include protothreads
 
 #include "pico/multicore.h"
@@ -23,6 +26,7 @@
 static unsigned char cell_array[240/size][320/size] ;
 static char cell_array_next[240/size][320/size] ;
 uint8_t start_init = 1; // flag to indicate if the initial state is set
+
 
 typedef enum {
     RESET,
@@ -39,6 +43,138 @@ static int button_control = 0;
 static int button_control_prev = 0;
 float x[WIDTH] = {0};
 float y[HEIGHT] = {0};
+
+int count = 0;
+
+//////////
+// Beep
+// Low-level alarm infrastructure we'll be using
+#define ALARM_NUM 0
+#define ALARM_IRQ 0
+
+// Macros for fixed-point arithmetic (faster than floating point)
+typedef signed int fix15 ;
+#define multfix15(a,b) ((fix15)((((signed long long)(a))*((signed long long)(b)))>>15))
+#define float2fix15(a) ((fix15)((a)*32768.0)) 
+#define fix2float15(a) ((float)(a)/32768.0)
+#define absfix15(a) abs(a) 
+#define int2fix15(a) ((fix15)(a << 15))
+#define fix2int15(a) ((int)(a >> 15))
+#define char2fix15(a) (fix15)(((fix15)(a)) << 15)
+#define divfix(a,b) (fix15)( (((signed long long)(a)) << 15) / (b))
+
+
+//Direct Digital Synthesis (DDS) parameters
+#define two32 4294967296.0  // 2^32 (a constant)
+#define Fs 50000
+#define DELAY 20 // 1/Fs (in microseconds)
+
+// the DDS units - core 0
+// Phase accumulator and phase increment. Increment sets output frequency.
+volatile unsigned int phase_accum_main_0;
+volatile unsigned int phase_incr_main_0 = (400.0*two32)/Fs ;
+
+// DDS sine table (populated in main())
+#define sine_table_size 256
+fix15 sin_table[sine_table_size] ;
+
+// Values output to DAC
+int DAC_output_0 ;
+int DAC_output_1 ;
+
+// Amplitude modulation parameters and variables
+fix15 max_amplitude = int2fix15(1) ;    // maximum amplitude
+fix15 attack_inc ;                      // rate at which sound ramps up
+fix15 decay_inc ;                       // rate at which sound ramps down
+fix15 current_amplitude_0 = 0 ;         // current amplitude (modified in ISR)
+fix15 current_amplitude_1 = 0 ;         // current amplitude (modified in ISR)
+
+// Timing parameters for beeps (units of interrupts)
+#define ATTACK_TIME             250
+#define DECAY_TIME              250
+#define SUSTAIN_TIME            10000
+#define BEEP_DURATION           6500
+#define BEEP_REPEAT_INTERVAL    50000
+
+// State machine variables
+volatile unsigned int STATE_0 = 0 ;
+volatile unsigned int count_0 = 0 ;
+
+// SPI data
+uint16_t DAC_data_1 ; // output value
+uint16_t DAC_data_0 ; // output value
+
+// DAC parameters (see the DAC datasheet)
+// A-channel, 1x, active
+#define DAC_config_chan_A 0b0011000000000000
+// B-channel, 1x, active
+#define DAC_config_chan_B 0b1011000000000000
+
+//SPI configurations (note these represent GPIO number, NOT pin number)
+#define PIN_MISO 4
+#define PIN_CS   5
+#define PIN_SCK  6
+#define PIN_MOSI 7
+#define LDAC     8
+#define LED      25
+#define SPI_PORT spi0
+
+//GPIO for timing the ISR
+#define ISR_GPIO 2
+
+static void alarm_irq(void) {
+    int frequency;
+    // printf("\n alarm: %d", STATE);
+    // Assert a GPIO when we enter the interrupt
+    gpio_put(ISR_GPIO, 1) ;
+
+    // Clear the alarm irq
+    hw_clear_bits(&timer_hw->intr, 1u << ALARM_NUM);
+
+    // Reset the alarm register
+    timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
+
+    
+    // DDS phase and sine table lookup
+    // frequency = (int)(count_0 * count_0 * (0.000153) + 2000);
+
+    // frequency = (int)(count_0 * count_0 * (0.000183) + 2000);
+    //frequency = (int)(count_0 * count_0 * (0.000183) + count * 0.01);
+    frequency = (int)(sqrt(sqrt(count))*20);
+    // printf("%d\n", frequency);
+
+    phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+    DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+        sin_table[phase_accum_main_0>>24])) + 2048 ;// Add 2048 to center it from range (-2048,2048) to (0,4096)
+
+    // Ramp up amplitude (ATTACK_TIME = 250)
+    if (count_0 < ATTACK_TIME) {
+        current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+    }
+    // Ramp down amplitude (DECAY_TIME = 250)
+    else if (count_0 > BEEP_DURATION - DECAY_TIME) {
+        current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+    }
+
+    // Mask with DAC control bits
+    DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+
+    // SPI write (no spinlock b/c of SPI buffer)
+    spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+    // Increment the counter
+    count_0 += 1 ;
+    // printf("\n count:%d", count_0);
+    // State transition?
+    if (count_0 == BEEP_DURATION) {
+        count_0 = 0 ;
+        // printf("\n after duration:%d", STATE);
+    }
+
+    // De-assert the GPIO when we leave the interrupt
+    gpio_put(ISR_GPIO, 0) ;
+
+}
 
 void mandelbrot() {
     if(button_control == 2) {
@@ -301,19 +437,22 @@ void is_alive(int x, int y) {
     }
     if (cnt == 3 && cell_array[x][y] == 0) {
         cell_array_next[x][y] = 1;
+        count++;
     }
     else if (cnt > 3 || cnt < 2) {
         cell_array_next[x][y] = 0;
     }
-    
+
     return;
 }
 
 
 void update_alive(){
+    count = 0;
     for (int i = 0; i< (240/size); i++){
         for (int j = 0; j < (320/size); j++){
             is_alive (i,j);
+
         }
     }
 }
@@ -377,8 +516,9 @@ static PT_THREAD (protothread_anim(struct pt *pt))
         pi_initial();
         random_initial();
         update_alive();
-        update_cell();
-
+        update_cell(); 
+        
+        
         PT_YIELD_usec(1000) ;
     }
     PT_END(pt);
@@ -395,6 +535,7 @@ static PT_THREAD (protothread_btn(struct pt *pt))
 
     while(1){
         button_pressing();
+        alarm_irq();
         // button_value = gpio_get(BUTTON_PIN)
 
         PT_YIELD_usec(1000) ;
@@ -419,7 +560,7 @@ int main(){
     // initialize button gpio
     gpio_init(BUTTON_PIN);
     gpio_set_dir(BUTTON_PIN, GPIO_IN);
-    
+
     tft_init_hw(); //Initialize the hardware for the TFT
     tft_begin(); //Initialize the TFT
     tft_fillScreen(ILI9340_BLACK); //Fill the entire screen with black colour
@@ -433,7 +574,50 @@ int main(){
     for (int i = 0; i < HEIGHT; i++) {
         y[i] = y_min + (y_max - y_min) * i / (HEIGHT - 1);
     }
+    
+    // Beep
+    // Initialize SPI channel (channel, baud rate set to 20MHz)
+    spi_init(SPI_PORT, 20000000) ;
+    // Format (channel, data bits per transfer, polarity, phase, order)
+    spi_set_format(SPI_PORT, 16, 0, 0, 0);
 
+    // Map SPI signals to GPIO ports
+    gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
+    gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
+    gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
+    gpio_set_function(PIN_CS, GPIO_FUNC_SPI) ;
+
+    // Map LDAC pin to GPIO port, hold it low (could alternatively tie to GND)
+    gpio_init(LDAC) ;
+    gpio_set_dir(LDAC, GPIO_OUT) ;
+    gpio_put(LDAC, 0) ;
+
+    // Setup the ISR-timing GPIO
+    gpio_init(ISR_GPIO) ;
+    gpio_set_dir(ISR_GPIO, GPIO_OUT);
+    gpio_put(ISR_GPIO, 0) ;
+    // set up increments for calculating bow envelope
+    attack_inc = divfix(max_amplitude, int2fix15(ATTACK_TIME)) ;
+    decay_inc =  divfix(max_amplitude, int2fix15(DECAY_TIME)) ;
+
+    // Build the sine lookup table
+    // scaled to produce values between 0 and 4096 (for 12-bit DAC)
+    int ii;
+    for (ii = 0; ii < sine_table_size; ii++){
+        sin_table[ii] = float2fix15(2047*sin((float)ii*6.283/(float)sine_table_size));
+    }
+
+
+
+    // Enable the interrupt for the alarm (we're using Alarm 0)
+    hw_set_bits(&timer_hw->inte, 1u << ALARM_NUM) ;
+    // Associate an interrupt handler with the ALARM_IRQ
+    irq_set_exclusive_handler(ALARM_IRQ, alarm_irq) ;
+    // Enable the alarm interrupt
+    irq_set_enabled(ALARM_IRQ, true) ;
+    // Write the lower 32 bits of the target time to the alarm register, arming it.
+    timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
+    //Beep end
 
       // start core 1 
     multicore_reset_core1();
@@ -481,4 +665,5 @@ int main(){
 //         unsigned char exTime = ((unsigned long)(get_absolute_time() / 1000) - begin_time); //Calculate the amount of time taken
 //         printf("%u\n", count); //Print the time out
 //     }
+   
 }
