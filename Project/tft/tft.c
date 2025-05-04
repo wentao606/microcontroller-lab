@@ -13,32 +13,20 @@
 #include "hardware/spi.h" //The hardware SPI library
 #include "hardware/sync.h"
 // Include protothreads
+
 #include "pico/multicore.h"
 #include "pt_cornell_rp2040_v1_3.h"
-
-// parameter for conway game of life
 #define size 1
 #define FRAME_RATE 33000
+#define BUTTON_PIN 14
 #define WIDTH 240
 #define HEIGHT 320
 #define MAX_ITER 2000
 
-int count = 0;
-
 static unsigned char cell_array[240/size][320/size] ;
 static char cell_array_next[240/size][320/size] ;
 uint8_t start_init = 1; // flag to indicate if the initial state is set
-
-// mouse control
-#define PIN_LEFT 8
-#define PIN_UP 9
-#define PIN_DOWN 10
-#define PIN_RIGHT 11
-#define PIN_CONFIRM 12
-#define BUTTON_PIN 14
-
-int curser_x = 120;
-int curser_y = 160;
+static char text1[40];
 
 typedef enum {
     RESET,
@@ -48,37 +36,15 @@ typedef enum {
     BUTTON_MAYBE_NOT_PRESSED
 } ButtonState;
 
-static ButtonState button_state_switch = RESET;
-static ButtonState button_state_left = RESET;
-static ButtonState button_state_right = RESET;
-static ButtonState button_state_up = RESET;
-static ButtonState button_state_down = RESET;
-static ButtonState button_state_confirm = RESET;
-int button_value_switch = -1;
-int button_value_up = -1;
-int button_value_down = -1;
-int button_value_left = -1;
-int button_value_right = -1;
-int button_value_confirm = -1;
-static int possible_switch = -1;
-static int possible_left = -1;
-static int possible_right = -1;
-static int possible_up = -1;
-static int possible_down = -1;
-static int possible_confirm = -1;
-static int button_control = 0;
-static int up_control = 0;
-static int down_control = 0;
-static int left_control = 0;
-static int right_control = 0;
-static int confirm_control = 0;
-static int button_control_prev = 0;
-
-int previous_left, previous_right, previous_up, previous_down = 0;
-
+static ButtonState button_state = RESET;
+int button_value = -1;
+static int possible = -1;
+static int button_control = -1;
+static int button_control_prev = -1;
 float x[WIDTH] = {0};
 float y[HEIGHT] = {0};
 
+int count = 0;
 
 //////////
 // Beep
@@ -129,14 +95,24 @@ fix15 current_amplitude_1 = 0 ;         // current amplitude (modified in ISR)
 #define SUSTAIN_TIME            10000
 #define BEEP_DURATION           6500
 #define BEEP_REPEAT_INTERVAL    50000
+#define TONE_DURATION           10000
 
 // State machine variables
+volatile unsigned int STATE_0 = 0 ;
 volatile unsigned int count_0 = 0 ;
+
+volatile int alive_count = 0;
+volatile int alive = 0;
+int count;
+int frequencies[4] = {261, 293, 329, 392};
 
 // SPI data
 uint16_t DAC_data_1 ; // output value
 uint16_t DAC_data_0 ; // output value
 
+
+// Menu control
+uint8_t menu_choice = 0;
 // DAC parameters (see the DAC datasheet)
 // A-channel, 1x, active
 #define DAC_config_chan_A 0b0011000000000000
@@ -166,95 +142,121 @@ static void alarm_irq(void) {
 
     // Reset the alarm register
     timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
-
     
-    // DDS phase and sine table lookup
-    // frequency = (int)(count_0 * count_0 * (0.000153) + 2000);
+    if ( button_control == 0 || button_control == 1 ) {
+        // DDS phase and sine table lookup
+        frequency = (int)(sqrt(count)*10);
+        // frequency = (int)(1000);
+        
 
-    // frequency = (int)(count_0 * count_0 * (0.000183) + 2000);
-    //frequency = (int)(count_0 * count_0 * (0.000183) + count * 0.01);
-    frequency = (int)(sqrt(sqrt(count))*20);
-    // printf("%d\n", frequency);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;// Add 2048 to center it from range (-2048,2048) to (0,4096)
 
-    phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
-    DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
-        sin_table[phase_accum_main_0>>24])) + 2048 ;// Add 2048 to center it from range (-2048,2048) to (0,4096)
+        // Ramp up amplitude (ATTACK_TIME = 250)
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+        }
+        // Ramp down amplitude (DECAY_TIME = 250)
+        else if (count_0 > BEEP_DURATION - DECAY_TIME) {
+            current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+        }
 
-    // Ramp up amplitude (ATTACK_TIME = 250)
-    if (count_0 < ATTACK_TIME) {
-        current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
-    }
-    // Ramp down amplitude (DECAY_TIME = 250)
-    else if (count_0 > BEEP_DURATION - DECAY_TIME) {
-        current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
-    }
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xfff))  ;
 
-    // Mask with DAC control bits
-    DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
 
-    // SPI write (no spinlock b/c of SPI buffer)
-    spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
-
-    // Increment the counter
-    count_0 += 1 ;
-    // printf("\n count:%d", count_0);
-    // State transition?
-    if (count_0 == BEEP_DURATION) {
-        count_0 = 0 ;
-        // printf("\n after duration:%d", STATE);
-    }
-
-    // De-assert the GPIO when we leave the interrupt
-    gpio_put(ISR_GPIO, 0) ;
-
-}
-void drawcell (int x, int y, int value) {
-    for (int i = 0; i < size; i++){
-        for (int j = 0; j < size; j++){
-            tft_drawPixel(size*x+i, size*y+j, value*ILI9340_WHITE);
+        // Increment the counter
+        count_0 += 1 ;
+        
+        if (count_0 == BEEP_DURATION) {
+            count_0 = 0 ;
+            current_amplitude_0 = 0 ;
+            
         }
     }
-    cell_array[x][y] = value;
+    else if ( button_control == 2 ) {
+        static int current_freq_idx = 0;
+
+        // Set new frequency at start of beep
+        frequency = frequencies[current_freq_idx];
+
+        // DDS phase and sine table lookup
+        phase_accum_main_0 += (int)((frequency * two32) / Fs);
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+                        sin_table[phase_accum_main_0 >> 24])) + 2048;
+
+        // Ramp up
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 += attack_inc;
+        }
+        // Ramp down
+        else if (count_0 > BEEP_DURATION - DECAY_TIME) {
+            current_amplitude_0 -= decay_inc;
+        }
+
+        // Mask with DAC control bits and send
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xfff));
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1);
+
+        count_0 += 1;
+
+        if (count_0 == BEEP_DURATION) {
+            count_0 = 0;
+            current_amplitude_0 = 0;
+
+            // Move to next frequency in the list (loop around)
+            current_freq_idx = (current_freq_idx + 1) % 4;
+        }
+    }
+    // De-assert the GPIO when we leave the interrupt
+    gpio_put(ISR_GPIO, 0) ;
 }
 
-// void mouse_control(){
-//     if (button_control == 1 || button_control == 2){
-//         if (up_control == 1) {
-//             curser_y -= 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
-//         if (down_control == 1) {
-//             curser_y += 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
-//         if (left_control == 1) {
-//             curser_x -= 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
-//         if (right_control == 1) {
-//             curser_x += 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
+// void menu() {
+//     // tft_fillScreen(ILI9340_BLACK);
+//     tft_setTextColor(ILI9340_WHITE);
+//     tft_setTextSize(1);
 
-//     }
+//     sprintf(text1, "1. Conway Game of Life - Pi");
+//     tft_setCursor(10, 10);
+//     tft_setTextColor2(ILI9340_WHITE, ILI9340_BLACK);
+//     tft_writeString(text1);
 
+//     sprintf(text1, "2. Conway Game of Life - Random");
+//     tft_setCursor(10, 20);
+//     tft_writeString(text1);
+
+//     sprintf(text1, "3. Mandelbrot Set");
+//     tft_setCursor(10, 30);
+//     tft_writeString(text1);
 // }
+void menu() {
+    if (button_control == -1) {
 
-void draw_curser( ){
-    if (button_control == 1 || button_control == 0){
-        tft_drawPixel(curser_x, curser_y, ILI9340_YELLOW);
-        drawcell(curser_x,curser_y,1);
-    }
-    else if (button_control == 2){
-        tft_drawPixel(curser_x, curser_y, ILI9340_YELLOW);
+        
+        tft_setTextSize(1);
+        for (int i = 0; i < 3; i++) {
+            
+            tft_setCursor(10, 10 + i * 10);
+
+            if (i == menu_choice) {
+                // Highlight this line
+                tft_setTextColor2(ILI9340_BLACK, ILI9340_WHITE);  // White background
+                sprintf(text1, "→ %d. ", i+1);
+            } else {
+                tft_setTextColor2(ILI9340_WHITE, ILI9340_BLACK);  // Normal
+                sprintf(text1, "  %d. ", i+1);
+            }
+
+            if (i == 0) strcat(text1, "Conway Game of Life - Pi");
+            else if (i == 1) strcat(text1, "Conway Game of Life - Random");
+            else if (i == 2) strcat(text1, "Mandelbrot Set");
+
+            tft_writeString(text1);
+        }
     }
 }
 
@@ -291,445 +293,77 @@ void mandelbrot() {
         }
     }
 }
-// ====================================================================
-// =                          button FSM                              =
-// ====================================================================
-void button_pressing_switch( )
+
+void button_pressing()
 {
-    switch (button_state_switch)
+    switch (button_state)
     {
 
     case RESET:
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_state_switch = BUTTON_NOT_PRESSED;
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_NOT_PRESSED;
     break;
 
     case BUTTON_NOT_PRESSED:
-        if (button_value_switch == 0){
-            button_value_switch = gpio_get(BUTTON_PIN);
-            button_state_switch = BUTTON_NOT_PRESSED;
+        if (button_value == 0){
+            button_value = gpio_get(BUTTON_PIN);
+            button_state = BUTTON_NOT_PRESSED;
         }
     else{
-        possible_switch = button_value_switch;
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_state_switch = BUTTON_MAYBE_PRESSED;
+        possible = button_value;
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_MAYBE_PRESSED;
     }
     break;
 
     case BUTTON_MAYBE_PRESSED:
-    if (button_value_switch == possible_switch){
-        printf("switch button pressed\n");
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_control += (button_control == 3)?-3:1; //remainder 1:,2:,3
-        button_state_switch = BUTTON_PRESSED;
+    if (button_value == possible){
+        button_value = gpio_get(BUTTON_PIN);
+        menu_choice = (menu_choice + 1) % 3; // Cycle through menu choices
+        button_control += (button_control == 3)?-3:1; //remainder 1:,2:,3:
+        button_state = BUTTON_PRESSED;
     }
     else{
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_state_switch = BUTTON_NOT_PRESSED;
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_NOT_PRESSED;
     }
     break;
     case BUTTON_PRESSED:
-    if (button_value_switch == possible_switch){
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_state_switch = BUTTON_PRESSED;
+    if (button_value == possible){
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_PRESSED;
         }
     else{
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_state_switch = BUTTON_MAYBE_NOT_PRESSED;
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_MAYBE_NOT_PRESSED;
     }
     case BUTTON_MAYBE_NOT_PRESSED:
-    if (button_value_switch == possible_switch) {
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_state_switch = BUTTON_PRESSED;
+    if (button_value == possible) {
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_PRESSED;
     }
     else {
-        button_value_switch = gpio_get(BUTTON_PIN);
-        button_state_switch = BUTTON_NOT_PRESSED;
+        button_value = gpio_get(BUTTON_PIN);
+        button_state = BUTTON_NOT_PRESSED;
     }
     break;
 
     default:
-        button_value_switch = -1;
-        possible_switch = -1;
+    button_value = -1;
+    possible = -1;
     break;
 
     }
 }
 
-void button_pressing_left()
-{
-    switch (button_state_left)
-    {
-    case RESET:
-        button_value_left = gpio_get(PIN_LEFT);
-        button_state_left = BUTTON_NOT_PRESSED;
-        break;
-
-    case BUTTON_NOT_PRESSED:
-        if (gpio_get(PIN_LEFT) == 0) {
-            button_value_left = gpio_get(PIN_LEFT);
-            button_state_left = BUTTON_NOT_PRESSED;
+void drawcell (int x, int y, int value) {
+    for (int i = 0; i < size; i++){
+        for (int j = 0; j < size; j++){
+            tft_drawPixel(size*x+i, size*y+j, value*ILI9340_WHITE);
         }
-        else {
-            possible_left = button_value_left;
-            button_value_left = gpio_get(PIN_LEFT);
-            button_state_left = BUTTON_MAYBE_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_PRESSED:
-        if (button_value_left == possible_left) {
-            button_value_left = gpio_get(PIN_LEFT);
-            printf("left button pressed\n");
-            left_control = 1;
-            // Optionally reset other controls
-            right_control = 0;
-            up_control = 0;
-            down_control = 0;
-            confirm_control = 0;
-            
-            curser_x -= previous_left;
-            previous_left *= 2;
-            previous_down = 1;
-            previous_up = 1;
-            previous_right = 1;
-
-            button_state_left = BUTTON_PRESSED;
-        }
-        else {
-            button_value_left = gpio_get(PIN_LEFT);
-            button_state_left = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_PRESSED:
-        if (button_value_left == possible_left) {
-            button_value_left = gpio_get(PIN_LEFT);
-            button_state_left = BUTTON_PRESSED;
-        }
-        else {
-            button_value_left = gpio_get(PIN_LEFT);
-            button_state_left = BUTTON_MAYBE_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_NOT_PRESSED:
-        if (button_value_left == possible_left) {
-            button_value_left = gpio_get(PIN_LEFT);
-            button_state_left = BUTTON_PRESSED;
-        }
-        else {
-            button_value_left = gpio_get(PIN_LEFT);
-            button_state_left = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    default:
-        button_value_left = -1;
-        possible_left = -1;
-        break;
     }
+    cell_array[x][y] = value;
 }
-void button_pressing_right()
-{
-    switch (button_state_right)
-    {
-    case RESET:
-        button_value_right = gpio_get(PIN_RIGHT);
-        button_state_right = BUTTON_NOT_PRESSED;
-        break;
-
-    case BUTTON_NOT_PRESSED:
-        if (gpio_get(PIN_RIGHT) == 0) {
-            button_value_right = gpio_get(PIN_RIGHT);
-            button_state_right = BUTTON_NOT_PRESSED;
-        }
-        else {
-            possible_right = button_value_right;
-            button_value_right = gpio_get(PIN_RIGHT);
-            button_state_right = BUTTON_MAYBE_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_PRESSED:
-        if (button_value_right == possible_right) {
-            button_value_right = gpio_get(PIN_RIGHT);
-            printf("right button pressed\n");
-            right_control = 1;
-            // Optionally reset other controls
-            left_control = 0;
-            up_control = 0;
-            down_control = 0;
-            confirm_control = 0;
-
-            curser_x += previous_right;
-            previous_right *= 2;
-            previous_down = 1;
-            previous_up = 1;
-            previous_left = 1;
-
-
-            button_state_right = BUTTON_PRESSED;
-        }
-        else {
-            button_value_right = gpio_get(PIN_RIGHT);
-            button_state_right = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_PRESSED:
-        if (button_value_right == possible_right) {
-            button_value_right = gpio_get(PIN_RIGHT);
-            button_state_right = BUTTON_PRESSED;
-        }
-        else {
-            button_value_right = gpio_get(PIN_RIGHT);
-            button_state_right = BUTTON_MAYBE_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_NOT_PRESSED:
-        if (button_value_right == possible_right) {
-            button_value_right = gpio_get(PIN_RIGHT);
-            button_state_right = BUTTON_PRESSED;
-        }
-        else {
-            button_value_right = gpio_get(PIN_RIGHT);
-            button_state_right = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    default:
-        button_value_right = -1;
-        possible_right = -1;
-        break;
-    }
-}
-
-void button_pressing_up()
-{
-    switch (button_state_up)
-    {
-    case RESET:
-        button_value_up = gpio_get(PIN_UP);
-        button_state_up = BUTTON_NOT_PRESSED;
-        break;
-
-    case BUTTON_NOT_PRESSED:
-        if (gpio_get(PIN_UP) == 0) {
-            button_value_up = gpio_get(PIN_UP);
-            button_state_up = BUTTON_NOT_PRESSED;
-        }
-        else {
-            possible_up = button_value_up;
-            button_value_up = gpio_get(PIN_UP);
-            button_state_up = BUTTON_MAYBE_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_PRESSED:
-        if (button_value_up == possible_up) {
-            button_value_up = gpio_get(PIN_UP);
-            printf("up button pressed\n");
-            up_control = 1;
-            // Optionally reset other controls
-            left_control = 0;
-            right_control = 0;
-            down_control = 0;
-            confirm_control = 0;
-
-            curser_y -= previous_up;
-            previous_up *= 2;
-            previous_down = 1;
-            previous_left = 1;
-            previous_right = 1;
-
-            button_state_up = BUTTON_PRESSED;
-            
-        }
-        else {
-            button_value_up = gpio_get(PIN_UP);
-            button_state_up = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_PRESSED:
-        if (button_value_up == possible_up) {
-            button_value_up = gpio_get(PIN_UP);
-            button_state_up = BUTTON_PRESSED;
-        }
-        else {
-            button_value_up = gpio_get(PIN_UP);
-            button_state_up = BUTTON_MAYBE_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_NOT_PRESSED:
-        if (button_value_up == possible_up) {
-            button_value_up = gpio_get(PIN_UP);
-            button_state_up = BUTTON_PRESSED;
-        }
-        else {
-            button_value_up = gpio_get(PIN_UP);
-            button_state_up = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    default:
-        button_value_up = -1;
-        possible_up = -1;
-        break;
-    }
-}
-void button_pressing_down()
-{
-    switch (button_state_down)
-    {
-    case RESET:
-        button_value_down = gpio_get(PIN_DOWN);
-        button_state_down = BUTTON_NOT_PRESSED;
-        break;
-
-    case BUTTON_NOT_PRESSED:
-        if (gpio_get(PIN_DOWN) == 0) {
-            button_value_down = gpio_get(PIN_DOWN);
-            button_state_down = BUTTON_NOT_PRESSED;
-        }
-        else {
-            possible_down = button_value_down;
-            button_value_down = gpio_get(PIN_DOWN);
-            button_state_down = BUTTON_MAYBE_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_PRESSED:
-        if (button_value_down == possible_down) {
-            button_value_down = gpio_get(PIN_DOWN);
-            printf("down button pressed\n");
-            down_control = 1;
-            // Optionally reset other controls
-            left_control = 0;
-            right_control = 0;
-            up_control = 0;
-            confirm_control = 0;
-
-            curser_y += previous_down;
-            previous_down *= 2;
-            previous_left = 1;
-            previous_up = 1;
-            previous_right = 1;
-
-            button_state_down = BUTTON_PRESSED;
-        }
-        else {
-            button_value_down = gpio_get(PIN_DOWN);
-            button_state_down = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_PRESSED:
-        if (button_value_down == possible_down) {
-            button_value_down = gpio_get(PIN_DOWN);
-            button_state_down = BUTTON_PRESSED;
-        }
-        else {
-            button_value_down = gpio_get(PIN_DOWN);
-            button_state_down = BUTTON_MAYBE_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_NOT_PRESSED:
-        if (button_value_down == possible_down) {
-            button_value_down = gpio_get(PIN_DOWN);
-            button_state_down = BUTTON_PRESSED;
-        }
-        else {
-            button_value_down = gpio_get(PIN_DOWN);
-            button_state_down = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    default:
-        button_value_down = -1;
-        possible_down = -1;
-        break;
-    }
-}
-void button_pressing_confirm()
-{
-    switch (button_state_confirm)
-    {
-    case RESET:
-        button_value_confirm = gpio_get(PIN_CONFIRM);
-        button_state_confirm = BUTTON_NOT_PRESSED;
-        break;
-
-    case BUTTON_NOT_PRESSED:
-        if (gpio_get(PIN_CONFIRM) == 0) {
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            button_state_confirm = BUTTON_NOT_PRESSED;
-        }
-        else {
-            possible_confirm = button_value_confirm;
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            button_state_confirm = BUTTON_MAYBE_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_PRESSED:
-        if (button_value_confirm == possible_confirm) {
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            printf("confirm button pressed\n");
-            confirm_control = 1;
-            // Optionally reset other controls
-            left_control = 0;
-            right_control = 0;
-            up_control = 0;
-            down_control = 0;
-
-            button_state_confirm = BUTTON_PRESSED;
-        }
-        else {
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            button_state_confirm = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_PRESSED:
-        if (button_value_confirm == possible_confirm) {
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            button_state_confirm = BUTTON_PRESSED;
-        }
-        else {
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            button_state_confirm = BUTTON_MAYBE_NOT_PRESSED;
-        }
-        break;
-
-    case BUTTON_MAYBE_NOT_PRESSED:
-        if (button_value_confirm == possible_confirm) {
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            button_state_confirm = BUTTON_PRESSED;
-        }
-        else {
-            button_value_confirm = gpio_get(PIN_CONFIRM);
-            button_state_confirm = BUTTON_NOT_PRESSED;
-        }
-        break;
-
-    default:
-        button_value_confirm = -1;
-        possible_confirm = -1;
-        break;
-    }
-}
-
-
-
-
-// ==============================================================================
-//                       button fsm end
-// ==============================================================================
 void random_initial(){
     if ( button_control == 1 && start_init) {
         start_init = 0;
@@ -779,9 +413,79 @@ void pi_initial(){
     }
 }
 
+void draw_gosper_glider_gun(int x, int y) {
+    int gun[][2] = {
+        {0,4},{1,4},{0,5},{1,5},
+        {10,4},{10,5},{10,6},{11,3},{11,7},{12,2},{12,8},
+        {13,2},{13,8},{14,5},{15,3},{15,7},{16,4},{16,5},{16,6},
+        {17,5},
+        {20,2},{20,3},{20,4},{21,2},{21,3},{21,4},
+        {22,1},{22,5},{24,0},{24,1},{24,5},{24,6},
+        {34,2},{34,3},{35,2},{35,3}
+    };
+    for (int i = 0; i < sizeof(gun)/sizeof(gun[0]); i++) {
+        drawcell(x + gun[i][0], y + gun[i][1], 1);
+    }
+}
 
+// R-pentomino (chaotic methuselah pattern)
+void draw_r_pentomino(int x, int y) {
+    int pts[][2] = {
+        {1,0},{2,0},{0,1},{1,1},{1,2}
+    };
+    for (int i = 0; i < 5; i++) {
+        drawcell(x + pts[i][0], y + pts[i][1], 1);
+    }
+}
 
-void is_alive(int x, int y) {
+// Diehard (chaotic, dies after 130 generations)
+void draw_diehard(int x, int y) {
+    int pts[][2] = {
+        {7,0},
+        {1,1},{2,1},
+        {2,2},{6,2},{7,2},{8,2}
+    };
+    for (int i = 0; i < 7; i++) {
+        drawcell(x + pts[i][0], y + pts[i][1], 1);
+    }
+}
+
+// Simple oscillator: Blinker (3-line)
+void draw_blinker(int x, int y) {
+    for (int i = 0; i < 3; i++) drawcell(x + i, y, 1);
+}
+
+// Still life: Block
+void draw_block(int x, int y) {
+    drawcell(x, y, 1); drawcell(x+1, y, 1);
+    drawcell(x, y+1, 1); drawcell(x+1, y+1, 1);
+}
+
+// Random scatter
+void draw_random_sprinkle(int width, int height, int probability) {
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            if (rand() % probability == 0) {
+                drawcell(x, y, 1);
+            }
+        }
+    }
+}
+
+void first_generation() {
+    draw_gosper_glider_gun(5, 5);             // left top
+    draw_r_pentomino(100, 50);                // mid
+    draw_diehard(200, 60);                    // right
+
+    draw_blinker(60, 30);
+    draw_blinker(150, 80);
+    draw_block(220, 30);
+    draw_block(50, 100);
+
+    draw_random_sprinkle(32, 24, 15);         //
+}
+
+int is_alive(int x, int y) {
     int cnt = 0;
     if (x > 0 & y > 0 & x < (240/size-1) & y < (320/size-1)) {
         cnt = cell_array[x-1][y-1] + cell_array[x-1][y]
@@ -818,24 +522,28 @@ void is_alive(int x, int y) {
     }
     if (cnt == 3 && cell_array[x][y] == 0) {
         cell_array_next[x][y] = 1;
-        count++;
+        
     }
     else if (cnt > 3 || cnt < 2) {
         cell_array_next[x][y] = 0;
     }
 
-    return;
+    return cell_array_next[x][y];
 }
 
 
 void update_alive(){
-    count = 0;
+    
+    
     for (int i = 0; i< (240/size); i++){
         for (int j = 0; j < (320/size); j++){
-            is_alive (i,j);
-
+            alive = is_alive (i,j);
+            if ( alive )
+                alive_count++;
         }
     }
+    count = alive_count;
+
 }
 
 void update_cell(){
@@ -883,7 +591,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     while(1){
         // button_value = gpio_get(BUTTON_PIN);
         // printf("button_control: %d, prev:%d\n", button_control, button_control_prev);
-        
+        alive_count = 0;
         if (button_control != button_control_prev) {
             button_control_prev = button_control;
             tft_fillScreen(ILI9340_BLACK);
@@ -893,12 +601,11 @@ static PT_THREAD (protothread_anim(struct pt *pt))
             if(button_control == 2)
                 mandelbrot();
         }
-
+        // printf("button_control: %d\n", button_control);
         pi_initial();
         random_initial();
         update_alive();
         update_cell(); 
-        draw_curser();
         
         
         PT_YIELD_usec(1000) ;
@@ -916,52 +623,21 @@ static PT_THREAD (protothread_btn(struct pt *pt))
     // random_initial();
 
     while(1){
-        button_pressing_switch();
-        button_pressing_up();
-        button_pressing_down();
-        button_pressing_right();
-        button_pressing_left();
-        button_pressing_confirm();
-
-        // printf("control: %d, left: %d, up: %d, down: %d, right: %d, confirm: %d\n", button_control, left_control, up_control, down_control, right_control, confirm_control);
-
-
+        button_pressing();
         alarm_irq();
-        // button_value = gpio_get(BUTTON_PIN)
-
-        PT_YIELD_usec(100) ;
-    }
-    PT_END(pt);
-} // btn thread
-
-static PT_THREAD (protothread_mouse(struct pt *pt))
-{
-    PT_BEGIN(pt);
-
-    static int begin_time ;
-    static int spare_time ;
-    // first_generation();
-    // random_initial();
-
-    while(1){
-        // mouse_control();
-        // printf("x: %d, y: %d", curser_x, curser_y);
-        left_control = 0;
-        right_control = 0;
-        up_control = 0;
-        down_control = 0;
-        confirm_control = 0;
-
-        
+        menu();
 
         PT_YIELD_usec(1000) ;
     }
     PT_END(pt);
-} 
+} // animation thread
+
+
 
 void core1_main(){
   // Add animation thread
     pt_add_thread(protothread_anim);
+
 
     pt_schedule_start ;
 
@@ -974,18 +650,7 @@ int main(){
     
     // initialize button gpio
     gpio_init(BUTTON_PIN);
-    gpio_init(PIN_UP);
-    gpio_init(PIN_DOWN);
-    gpio_init(PIN_LEFT);
-    gpio_init(PIN_RIGHT);
-    gpio_init(PIN_CONFIRM);
-
     gpio_set_dir(BUTTON_PIN, GPIO_IN);
-    gpio_set_dir(PIN_UP, GPIO_IN);
-    gpio_set_dir(PIN_DOWN, GPIO_IN);
-    gpio_set_dir(PIN_LEFT, GPIO_IN);
-    gpio_set_dir(PIN_RIGHT, GPIO_IN);
-    gpio_set_dir(PIN_CONFIRM, GPIO_IN);
 
     tft_init_hw(); //Initialize the hardware for the TFT
     tft_begin(); //Initialize the TFT
@@ -1051,11 +716,9 @@ int main(){
 
     // add threads
     pt_add_thread(protothread_btn);
-    // pt_add_thread(protothread_mouse);
-
+    // pt_add_thread(protothread_update_alive);
 
     // start scheduler
     pt_schedule_start ;
 
-   
 }
