@@ -26,7 +26,7 @@
 static unsigned char cell_array[240/size][320/size] ;
 static char cell_array_next[240/size][320/size] ;
 uint8_t start_init = 1; // flag to indicate if the initial state is set
-
+static char text1[40];
 
 typedef enum {
     RESET,
@@ -39,8 +39,8 @@ typedef enum {
 static ButtonState button_state = RESET;
 int button_value = -1;
 static int possible = -1;
-static int button_control = 0;
-static int button_control_prev = 0;
+static int button_control = -1;
+static int button_control_prev = -1;
 float x[WIDTH] = {0};
 float y[HEIGHT] = {0};
 
@@ -95,15 +95,24 @@ fix15 current_amplitude_1 = 0 ;         // current amplitude (modified in ISR)
 #define SUSTAIN_TIME            10000
 #define BEEP_DURATION           6500
 #define BEEP_REPEAT_INTERVAL    50000
+#define TONE_DURATION           10000
 
 // State machine variables
 volatile unsigned int STATE_0 = 0 ;
 volatile unsigned int count_0 = 0 ;
 
+volatile int alive_count = 0;
+volatile int alive = 0;
+int count;
+int frequencies[4] = {261, 293, 329, 392};
+
 // SPI data
 uint16_t DAC_data_1 ; // output value
 uint16_t DAC_data_0 ; // output value
 
+
+// Menu control
+uint8_t menu_choice = 0;
 // DAC parameters (see the DAC datasheet)
 // A-channel, 1x, active
 #define DAC_config_chan_A 0b0011000000000000
@@ -133,47 +142,122 @@ static void alarm_irq(void) {
 
     // Reset the alarm register
     timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
-
     
-    // DDS phase and sine table lookup
-    // frequency = (int)(count_0 * count_0 * (0.000153) + 2000);
+    if ( button_control == 0 || button_control == 1 ) {
+        // DDS phase and sine table lookup
+        frequency = (int)(sqrt(count)*10);
+        // frequency = (int)(1000);
+        
 
-    // frequency = (int)(count_0 * count_0 * (0.000183) + 2000);
-    //frequency = (int)(count_0 * count_0 * (0.000183) + count * 0.01);
-    frequency = (int)(sqrt(sqrt(count))*20);
-    // printf("%d\n", frequency);
+        phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+            sin_table[phase_accum_main_0>>24])) + 2048 ;// Add 2048 to center it from range (-2048,2048) to (0,4096)
 
-    phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
-    DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
-        sin_table[phase_accum_main_0>>24])) + 2048 ;// Add 2048 to center it from range (-2048,2048) to (0,4096)
+        // Ramp up amplitude (ATTACK_TIME = 250)
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+        }
+        // Ramp down amplitude (DECAY_TIME = 250)
+        else if (count_0 > BEEP_DURATION - DECAY_TIME) {
+            current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+        }
 
-    // Ramp up amplitude (ATTACK_TIME = 250)
-    if (count_0 < ATTACK_TIME) {
-        current_amplitude_0 = (current_amplitude_0 + attack_inc) ;
+        // Mask with DAC control bits
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xfff))  ;
+
+        // SPI write (no spinlock b/c of SPI buffer)
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
+
+        // Increment the counter
+        count_0 += 1 ;
+        
+        if (count_0 == BEEP_DURATION) {
+            count_0 = 0 ;
+            current_amplitude_0 = 0 ;
+            
+        }
     }
-    // Ramp down amplitude (DECAY_TIME = 250)
-    else if (count_0 > BEEP_DURATION - DECAY_TIME) {
-        current_amplitude_0 = (current_amplitude_0 - decay_inc) ;
+    else if ( button_control == 2 ) {
+        static int current_freq_idx = 0;
+
+        // Set new frequency at start of beep
+        frequency = frequencies[current_freq_idx];
+
+        // DDS phase and sine table lookup
+        phase_accum_main_0 += (int)((frequency * two32) / Fs);
+        DAC_output_0 = fix2int15(multfix15(current_amplitude_0,
+                        sin_table[phase_accum_main_0 >> 24])) + 2048;
+
+        // Ramp up
+        if (count_0 < ATTACK_TIME) {
+            current_amplitude_0 += attack_inc;
+        }
+        // Ramp down
+        else if (count_0 > BEEP_DURATION - DECAY_TIME) {
+            current_amplitude_0 -= decay_inc;
+        }
+
+        // Mask with DAC control bits and send
+        DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xfff));
+        spi_write16_blocking(SPI_PORT, &DAC_data_0, 1);
+
+        count_0 += 1;
+
+        if (count_0 == BEEP_DURATION) {
+            count_0 = 0;
+            current_amplitude_0 = 0;
+
+            // Move to next frequency in the list (loop around)
+            current_freq_idx = (current_freq_idx + 1) % 4;
+        }
     }
-
-    // Mask with DAC control bits
-    DAC_data_0 = (DAC_config_chan_B | (DAC_output_0 & 0xffff))  ;
-
-    // SPI write (no spinlock b/c of SPI buffer)
-    spi_write16_blocking(SPI_PORT, &DAC_data_0, 1) ;
-
-    // Increment the counter
-    count_0 += 1 ;
-    // printf("\n count:%d", count_0);
-    // State transition?
-    if (count_0 == BEEP_DURATION) {
-        count_0 = 0 ;
-        // printf("\n after duration:%d", STATE);
-    }
-
     // De-assert the GPIO when we leave the interrupt
     gpio_put(ISR_GPIO, 0) ;
+}
 
+// void menu() {
+//     // tft_fillScreen(ILI9340_BLACK);
+//     tft_setTextColor(ILI9340_WHITE);
+//     tft_setTextSize(1);
+
+//     sprintf(text1, "1. Conway Game of Life - Pi");
+//     tft_setCursor(10, 10);
+//     tft_setTextColor2(ILI9340_WHITE, ILI9340_BLACK);
+//     tft_writeString(text1);
+
+//     sprintf(text1, "2. Conway Game of Life - Random");
+//     tft_setCursor(10, 20);
+//     tft_writeString(text1);
+
+//     sprintf(text1, "3. Mandelbrot Set");
+//     tft_setCursor(10, 30);
+//     tft_writeString(text1);
+// }
+void menu() {
+    if (button_control == -1) {
+
+        
+        tft_setTextSize(1);
+        for (int i = 0; i < 3; i++) {
+            
+            tft_setCursor(10, 10 + i * 10);
+
+            if (i == menu_choice) {
+                // Highlight this line
+                tft_setTextColor2(ILI9340_BLACK, ILI9340_WHITE);  // White background
+                sprintf(text1, "→ %d. ", i+1);
+            } else {
+                tft_setTextColor2(ILI9340_WHITE, ILI9340_BLACK);  // Normal
+                sprintf(text1, "  %d. ", i+1);
+            }
+
+            if (i == 0) strcat(text1, "Conway Game of Life - Pi");
+            else if (i == 1) strcat(text1, "Conway Game of Life - Random");
+            else if (i == 2) strcat(text1, "Mandelbrot Set");
+
+            tft_writeString(text1);
+        }
+    }
 }
 
 void mandelbrot() {
@@ -235,6 +319,7 @@ void button_pressing()
     case BUTTON_MAYBE_PRESSED:
     if (button_value == possible){
         button_value = gpio_get(BUTTON_PIN);
+        menu_choice = (menu_choice + 1) % 3; // Cycle through menu choices
         button_control += (button_control == 3)?-3:1; //remainder 1:,2:,3:
         button_state = BUTTON_PRESSED;
     }
@@ -400,7 +485,7 @@ void first_generation() {
     draw_random_sprinkle(32, 24, 15);         //
 }
 
-void is_alive(int x, int y) {
+int is_alive(int x, int y) {
     int cnt = 0;
     if (x > 0 & y > 0 & x < (240/size-1) & y < (320/size-1)) {
         cnt = cell_array[x-1][y-1] + cell_array[x-1][y]
@@ -437,24 +522,28 @@ void is_alive(int x, int y) {
     }
     if (cnt == 3 && cell_array[x][y] == 0) {
         cell_array_next[x][y] = 1;
-        count++;
+        
     }
     else if (cnt > 3 || cnt < 2) {
         cell_array_next[x][y] = 0;
     }
 
-    return;
+    return cell_array_next[x][y];
 }
 
 
 void update_alive(){
-    count = 0;
+    
+    
     for (int i = 0; i< (240/size); i++){
         for (int j = 0; j < (320/size); j++){
-            is_alive (i,j);
-
+            alive = is_alive (i,j);
+            if ( alive )
+                alive_count++;
         }
     }
+    count = alive_count;
+
 }
 
 void update_cell(){
@@ -502,7 +591,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     while(1){
         // button_value = gpio_get(BUTTON_PIN);
         // printf("button_control: %d, prev:%d\n", button_control, button_control_prev);
-        
+        alive_count = 0;
         if (button_control != button_control_prev) {
             button_control_prev = button_control;
             tft_fillScreen(ILI9340_BLACK);
@@ -536,12 +625,14 @@ static PT_THREAD (protothread_btn(struct pt *pt))
     while(1){
         button_pressing();
         alarm_irq();
-        // button_value = gpio_get(BUTTON_PIN)
+        menu();
 
         PT_YIELD_usec(1000) ;
     }
     PT_END(pt);
 } // animation thread
+
+
 
 void core1_main(){
   // Add animation thread
@@ -629,41 +720,5 @@ int main(){
 
     // start scheduler
     pt_schedule_start ;
-    // first_generation();
-    // while(true){
-    //     update_alive();
-    //     // sleep_ms(500);
-    //     update_cell();
-    //     // sleep_ms(500);
-    // }
 
-//     while(1){ //Infinite while loop
-//         unsigned long begin_time = (unsigned long)(get_absolute_time() / 1000); //Get the start time
-//         switch(count){ //Based on the current count, switch different colours
-//             case 0: col = ILI9340_BLUE;
-//                     break;
-//             case 1: col = ILI9340_RED;
-//                     break;
-//             case 2: col = ILI9340_GREEN;
-//                     break;
-//             case 3: col = ILI9340_CYAN;
-//                     break;
-//             case 4: col = ILI9340_MAGENTA;
-//                     break;
-//             case 5: col = ILI9340_YELLOW;
-//                     break;
-//             case 6: col = ILI9340_WHITE;
-//                     break;
-//         }
-//         for(i = 0; i < ILI9340_TFTWIDTH / 4; i++){
-//             for(j = 0; j < ILI9340_TFTHEIGHT / 4; j++){
-//                 //tft_drawRect(i << 2, j << 2, 4, 4, col); //Simply drawing a rectangle takes 222 ms
-//                 tft_fillRect(i << 2, j << 2, 4, 4, col); //Filling the entire rectangle surprisingly takes 110 ms
-//             }
-//         }
-//         count = (count + 1) % 7; //Increment the count and keep it between 0-6
-//         unsigned char exTime = ((unsigned long)(get_absolute_time() / 1000) - begin_time); //Calculate the amount of time taken
-//         printf("%u\n", count); //Print the time out
-//     }
-   
 }
