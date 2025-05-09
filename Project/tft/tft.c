@@ -366,7 +366,7 @@ void menu() {
     // printf("%d\n", button_control);
     if (button_control == -1) {
         sprintf(text1, "1.Conway Game of Life - Pi");
-        setCursor(10, 10);
+        setCursor(30, 10);
         if (menu_choice == 0) {
             setTextColor2(BLACK, WHITE);
         } else {
@@ -376,7 +376,7 @@ void menu() {
         writeString(text1);
     
         sprintf(text1, "2.Conway Game of Life - Random");
-        setCursor(10, 20);
+        setCursor(30, 20);
         // setTextColor2(WHITE, BLACK);
         if (menu_choice == 1) {
             setTextColor2(BLACK, WHITE);
@@ -387,7 +387,7 @@ void menu() {
         writeString(text1);
 
         sprintf(text1, "3.Mandelbrot Set");
-        setCursor(10, 30);
+        setCursor(30, 30);
         // setTextColor2(WHITE, BLACK);
         if (menu_choice == 2) {
             setTextColor2(BLACK, WHITE);
@@ -404,7 +404,7 @@ const char* mandelbrot_title[] = { "Mandel-","brot", "Set" };
 
 void draw_title_area( const char* title_words[], int word_count ) {
     // Fill the rightmost 112-pixel-wide strip with white
-    fillRect(528,0,112,480,WHITE);
+    // fillRect(528,0,112,480,WHITE);
 
     // Display one word per line, left-aligned in the white strip
     for (int i = 0; i < word_count; i++) {
@@ -1097,6 +1097,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
             start_init = 1;
             curser_x = default_curser_x;
             curser_y = default_curser_y;
+            fillRect(528,0,112,480,WHITE);
             if(button_control == 2){
                 for (int i = 0; i < WIDTH_DISPLAY; i++) {
                     x[i] = x_min + (x_max - x_min) * i / (WIDTH_DISPLAY - 1);
