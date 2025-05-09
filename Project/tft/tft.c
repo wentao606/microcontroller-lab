@@ -1,4 +1,25 @@
 
+/**
+ * Hunter Adams (vha3@cornell.edu)
+ * 
+ * This demonstration animates two balls bouncing about the screen.
+ * Through a serial interface, the user can change the ball color.
+ *
+ * HARDWARE CONNECTIONS
+ *  - GPIO 16 ---> VGA Hsync
+ *  - GPIO 17 ---> VGA Vsync
+ *  - GPIO 18 ---> 470 ohm resistor ---> VGA Green 
+ *  - GPIO 19 ---> 330 ohm resistor ---> VGA Green
+ *  - GPIO 20 ---> 330 ohm resistor ---> VGA Blue
+ *  - GPIO 21 ---> 330 ohm resistor ---> VGA Red
+ *  - RP2040 GND ---> VGA GND
+ *
+ * RESOURCES USED
+ *  - PIO state machines 0, 1, and 2 on PIO instance 0
+ *  - DMA channels (2, by claim mechanism)
+ *  - 153.6 kBytes of RAM (for pixel color data)
+ *
+ */
 #include <stdio.h> //The standard C library
 #include <stdlib.h> //C stdlib
 #include <string.h>
@@ -9,18 +30,20 @@
 #include "hardware/irq.h" //The hardware interrupt library
 #include "hardware/pwm.h" //The hardware PWM library
 #include "hardware/pio.h" //The hardware PIO library
-#include "TFTMaster.h" //The TFT Master library
+// #include "TFTMaster.h" //The TFT Master library
 #include "hardware/dma.h"
 #include "hardware/spi.h" //The hardware SPI library
 #include "hardware/sync.h"
 // Include protothreads
 #include "pico/multicore.h"
 #include "pt_cornell_rp2040_v1_3.h"
+#include "vga16_graphics.h"
+
 
 #define size 1
 #define FRAME_RATE 33000
-#define WIDTH 240
-#define HEIGHT 320
+#define WIDTH 640
+#define HEIGHT 480
 #define MAX_ITER 2000
 
 
@@ -177,7 +200,6 @@ static void alarm_irq(void) {
     if ( button_control == 0 || button_control == 1 ) {
         // DDS phase and sine table lookup
         frequency = (int)(sqrt(count)*10);
-        // frequency = (int)(1000);
         
 
         phase_accum_main_0 += (int)((frequency*two32)/Fs) ;
@@ -249,20 +271,19 @@ static void alarm_irq(void) {
 
 
 void menu() {
+    // printf("%d\n", button_control);
     if (button_control == -1) {
-
-        
-        tft_setTextSize(1);
+        setTextSize(1);
         for (int i = 0; i < 3; i++) {
             
-            tft_setCursor(10, 10 + i * 10);
+            setCursor(10, 10 + i * 10);
 
             if (i == menu_choice) {
                 // Highlight this line
-                tft_setTextColor2(ILI9340_BLACK, ILI9340_WHITE);  // White background
+                setTextColor2(BLACK, WHITE);  // White background
                 sprintf(text1, "→ %d. ", i+1);
             } else {
-                tft_setTextColor2(ILI9340_WHITE, ILI9340_BLACK);  // Normal
+                setTextColor2(WHITE, BLACK);  // Normal
                 sprintf(text1, "  %d. ", i+1);
             }
 
@@ -270,63 +291,49 @@ void menu() {
             else if (i == 1) strcat(text1, "Conway Game of Life - Random");
             else if (i == 2) strcat(text1, "Mandelbrot Set");
 
-            tft_writeString(text1);
+            writeString(text1);
         }
     }
 }
 void drawcell (int x, int y, int value) {
     for (int i = 0; i < size; i++){
         for (int j = 0; j < size; j++){
-            tft_drawPixel(size*x+i, size*y+j, value*ILI9340_WHITE);
+            drawPixel(size*x+i, size*y+j, value*WHITE);
         }
     }
     cell_array[x][y] = value;
 }
 
-// void mouse_control(){
-//     if (button_control == 1 || button_control == 2){
-//         if (up_control == 1) {
-//             curser_y -= 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
-//         if (down_control == 1) {
-//             curser_y += 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
-//         if (left_control == 1) {
-//             curser_x -= 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
-//         if (right_control == 1) {
-//             curser_x += 1;
-//             if (cell_array[curser_x][curser_y] == 0){
-//                 drawcell(curser_x, curser_y, 1);
-//             }
-//         }
-
-//     }
-
-// }
+int live_x[20] = {0};
+int live_y[20] = {0};
+int live_count = 0;
 
 void draw_curser( ){
-    if (button_control == 1 || button_control == 0){
-        tft_drawPixel(curser_x, curser_y, ILI9340_YELLOW);
-        drawcell(curser_x,curser_y,1);
+    printf("lve_count = %d\n", live_count);
+    if (button_control == 1 || button_control == 0) {
+        if (live_x[live_count] != curser_x || live_y[live_count] != curser_y) {
+            live_count++;
+            live_x[live_count] = curser_x;
+            live_y[live_count] = curser_y;
+            if (live_count == 20) {
+                live_count --;
+            }
+        }
+        drawPixel(curser_x, curser_y, YELLOW);
+        drawPixel(curser_x-1, curser_y-1, YELLOW);
+        drawPixel(curser_x+1, curser_y+1, YELLOW);
+        drawPixel(curser_x+1, curser_y-1, YELLOW);
+        drawPixel(curser_x-1, curser_y+1, YELLOW);
+        // drawcell(curser_x,curser_y,1);
     }
     else if (button_control == 2){
-        tft_drawPixel(curser_x, curser_y, ILI9340_YELLOW);
+        drawPixel(curser_x, curser_y, YELLOW);
     }
 }
 
 void mandelbrot() {
     if(button_control == 2) {
-        tft_fillScreen(ILI9340_BLACK);
+        fillRect(0, 0, 320, 480, BLACK);
     
         float Zre, Zim, Cre, Cim ;
         float Zre_sq, Zim_sq ;
@@ -345,14 +352,14 @@ void mandelbrot() {
                     n++;
                     // printf("n: %d\n", n);
                 }
-                if (n >= MAX_ITER) tft_drawPixel(i, j, ILI9340_BLACK) ;
-                else if (n >= (MAX_ITER>>1)) tft_drawPixel(i, j, ILI9340_WHITE) ;
-                else if (n >= (MAX_ITER>>2)) tft_drawPixel(i, j, ILI9340_YELLOW) ;
-                else if (n >= (MAX_ITER>>3)) tft_drawPixel(i, j, ILI9340_MAGENTA) ;
-                else if (n >= (MAX_ITER>>4)) tft_drawPixel(i, j, ILI9340_RED) ;
-                else if (n >= (MAX_ITER>>5)) tft_drawPixel(i, j, ILI9340_BLUE) ;
-                else if (n >= (MAX_ITER>>6)) tft_drawPixel(i, j, ILI9340_MAGENTA) ;
-                else tft_drawPixel(i, j, ILI9340_CYAN) ;
+                if (n >= MAX_ITER) drawPixel(i, j, BLACK) ;
+                else if (n >= (MAX_ITER>>1)) drawPixel(i, j, WHITE) ;
+                else if (n >= (MAX_ITER>>2)) drawPixel(i, j, YELLOW) ;
+                else if (n >= (MAX_ITER>>3)) drawPixel(i, j, MED_GREEN) ;
+                else if (n >= (MAX_ITER>>4)) drawPixel(i, j, RED) ;
+                else if (n >= (MAX_ITER>>5)) drawPixel(i, j, DARK_ORANGE) ;
+                else if (n >= (MAX_ITER>>6)) drawPixel(i, j, ORANGE) ;
+                else drawPixel(i, j, PINK) ;
             }
         }
     }
@@ -752,7 +759,15 @@ void button_pressing_confirm()
             right_control = 0;
             up_control = 0;
             down_control = 0;
-
+            if (button_control == 0 || button_control == 1) {
+                for(int j = 0; j < live_count; j++) {
+                    drawcell(live_x[j], live_y[j], 1);
+                    live_x[j] = -1;
+                    live_y[j] = -1;
+                }   
+                live_count = 0;
+            }
+           
             button_state_confirm = BUTTON_PRESSED;
         }
         else {
@@ -954,7 +969,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
         alive_count = 0;
         if (button_control != button_control_prev) {
             button_control_prev = button_control;
-            tft_fillScreen(ILI9340_BLACK);
+            fillRect(0, 0, 320, 480, BLACK);
             memset(cell_array, 0, sizeof(cell_array));
             memset(cell_array_next, 0, sizeof(cell_array_next));
             start_init = 1;
@@ -1056,9 +1071,9 @@ int main(){
     gpio_set_dir(PIN_RIGHT, GPIO_IN);
     gpio_set_dir(PIN_CONFIRM, GPIO_IN);
 
-    tft_init_hw(); //Initialize the hardware for the TFT
-    tft_begin(); //Initialize the TFT
-    tft_fillScreen(ILI9340_BLACK); //Fill the entire screen with black colour
+    initVGA(); //Initialize the hardware for the TFT
+    // tft_begin(); //Initialize the TFT
+    fillRect(0, 0, 320, 480, BLACK); //Fill the entire screen with black colour
     // initialize the array 
     float x_min = -2.0, x_max = 1.0;
     float y_min = -2.0, y_max = 1.0;

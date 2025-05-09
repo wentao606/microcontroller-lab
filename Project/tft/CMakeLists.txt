@@ -45,13 +45,17 @@ pico_enable_stdio_usb(tft 1)
 pico_enable_stdio_uart(tft 1)
 
 
-pico_generate_pio_header(tft ${CMAKE_CURRENT_LIST_DIR}/SPIPIO.pio)
+# pico_generate_pio_header(tft ${CMAKE_CURRENT_LIST_DIR}/SPIPIO.pio)
+# must match with pio filename and executable name from above
+pico_generate_pio_header(tft ${CMAKE_CURRENT_LIST_DIR}/hsync.pio)
+pico_generate_pio_header(tft ${CMAKE_CURRENT_LIST_DIR}/vsync.pio)
+pico_generate_pio_header(tft ${CMAKE_CURRENT_LIST_DIR}/rgb.pio)
 
-target_sources(tft PRIVATE tft.c TFTMaster.c glcdfont.c)
+target_sources(tft PRIVATE tft.c glcdfont.c vga16_graphics.c)
 # Add the standard library to the build
 target_link_libraries(tft PRIVATE
         pico_stdlib hardware_gpio pico_time hardware_pio hardware_dma hardware_spi
-        hardware_pwm hardware_irq pico_bootsel_via_double_reset pico_multicore
+        hardware_pwm hardware_irq pico_bootsel_via_double_reset pico_multicore 
         )
 
 
