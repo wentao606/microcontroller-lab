@@ -38,13 +38,15 @@
 #include "pico/multicore.h"
 #include "pt_cornell_rp2040_v1_3.h"
 #include "vga16_graphics.h"
+#include "hardware/adc.h"
 
 
-#define size 1
+#define size 2
 #define FRAME_RATE 33000
 #define WIDTH 640
 #define HEIGHT 480
-#define MAX_ITER 2000
+#define MAX_ITER 500
+#define WIDTH_DISPLAY 528
 
 
 volatile int alive_count = 0;
@@ -54,8 +56,11 @@ static char text1[40];
 int frequencies[4] = {261, 293, 329, 392};
 uint8_t menu_choice = 0;
 
-static unsigned char cell_array[240/size][320/size] ;
-static char cell_array_next[240/size][320/size] ;
+float x_min = -2.0, x_max = 1.0;
+float y_min = -2.0, y_max = 1.0;
+
+static unsigned char cell_array[WIDTH_DISPLAY/size][HEIGHT/size] ;
+static char cell_array_next[WIDTH_DISPLAY/size][HEIGHT/size] ;
 uint8_t start_init = 1; // flag to indicate if the initial state is set
 
 // mouse control
@@ -65,9 +70,28 @@ uint8_t start_init = 1; // flag to indicate if the initial state is set
 #define PIN_RIGHT 11
 #define PIN_CONFIRM 12
 #define BUTTON_PIN 14
+#define ADC_PIN 26
 
-int curser_x = 120;
-int curser_y = 160;
+#define default_curser_x 120
+#define default_curser_y 160
+
+int curser_x = default_curser_x;
+int curser_y = default_curser_y;
+
+// potentiometer
+#define DEFAULT_SIZE 5
+#define min_zoom_size 1
+#define max_zoom_size 10
+#define zoom_unit_size 11
+
+int potentio_read;
+int potentio_read_prev;
+int zoom_size_prev;
+int zoom_size_set = DEFAULT_SIZE;
+int zoom_start_x;
+int zoom_start_y;
+int zoom_end_x;
+int zoom_end_y;
 
 typedef enum {
     RESET,
@@ -95,15 +119,16 @@ static int possible_right = -1;
 static int possible_up = -1;
 static int possible_down = -1;
 static int possible_confirm = -1;
-static int button_control = 0;
+static int button_control = -1;
 static int up_control = 0;
 static int down_control = 0;
 static int left_control = 0;
 static int right_control = 0;
 static int confirm_control = 0;
-static int button_control_prev = 0;
+static int button_control_prev = -1;
 
-int previous_left, previous_right, previous_up, previous_down = 0;
+float previous_left = 1, previous_right = 1, previous_up = 1, previous_down = 1;
+float acc = 1.2;
 
 float x[WIDTH] = {0};
 float y[HEIGHT] = {0};
@@ -268,33 +293,22 @@ static void alarm_irq(void) {
     gpio_put(ISR_GPIO, 0) ;
 }
 
-
-
-void menu() {
-    // printf("%d\n", button_control);
-    if (button_control == -1) {
-        setTextSize(1);
-        for (int i = 0; i < 3; i++) {
-            
-            setCursor(10, 10 + i * 10);
-
-            if (i == menu_choice) {
-                // Highlight this line
-                setTextColor2(BLACK, WHITE);  // White background
-                sprintf(text1, "→ %d. ", i+1);
-            } else {
-                setTextColor2(WHITE, BLACK);  // Normal
-                sprintf(text1, "  %d. ", i+1);
-            }
-
-            if (i == 0) strcat(text1, "Conway Game of Life - Pi");
-            else if (i == 1) strcat(text1, "Conway Game of Life - Random");
-            else if (i == 2) strcat(text1, "Mandelbrot Set");
-
-            writeString(text1);
+void change_zoom_size(){
+    if (button_control == 2 ){
+        adc_select_input(0);
+        potentio_read = adc_read();
+        // printf("pot:%d\n", potentio_read);
+        zoom_size_prev = zoom_size_set;
+        if (potentio_read != potentio_read_prev) {
+        zoom_size_set = (int)min_zoom_size + (int)((potentio_read-13)*(max_zoom_size-min_zoom_size)/(4095-13));
+        zoom_size_set = zoom_size_prev + (int)((zoom_size_set - zoom_size_prev)>>1);
+        potentio_read_prev = potentio_read;
         }
+
     }
 }
+
+
 void drawcell (int x, int y, int value) {
     for (int i = 0; i < size; i++){
         for (int j = 0; j < size; j++){
@@ -304,41 +318,122 @@ void drawcell (int x, int y, int value) {
     cell_array[x][y] = value;
 }
 
-int live_x[20] = {0};
-int live_y[20] = {0};
+int live_x[50] = {0};
+int live_y[50] = {0};
 int live_count = 0;
 
 void draw_curser( ){
-    printf("lve_count = %d\n", live_count);
     if (button_control == 1 || button_control == 0) {
-        if (live_x[live_count] != curser_x || live_y[live_count] != curser_y) {
+        if (live_x[live_count] != curser_x*size || live_y[live_count] != curser_y*size) {
+            printf("move cursor\n");
+            drawPixel(live_x[live_count]-1,  live_y[live_count]-1, BLACK);
+            drawPixel(live_x[live_count]+1,  live_y[live_count]+1, BLACK);
+            drawPixel(live_x[live_count]+1,  live_y[live_count]-1, BLACK);
+            drawPixel(live_x[live_count]-1,  live_y[live_count]+1, BLACK);
             live_count++;
-            live_x[live_count] = curser_x;
-            live_y[live_count] = curser_y;
-            if (live_count == 20) {
+            live_x[live_count] = curser_x*size;
+            live_y[live_count] = curser_y*size;
+            if (live_count == 50) {
                 live_count --;
             }
         }
-        drawPixel(curser_x, curser_y, YELLOW);
-        drawPixel(curser_x-1, curser_y-1, YELLOW);
-        drawPixel(curser_x+1, curser_y+1, YELLOW);
-        drawPixel(curser_x+1, curser_y-1, YELLOW);
-        drawPixel(curser_x-1, curser_y+1, YELLOW);
-        // drawcell(curser_x,curser_y,1);
+        drawPixel(curser_x*size, curser_y*size, YELLOW);
+        drawPixel(curser_x*size-1, curser_y*size-1, YELLOW);
+        drawPixel(curser_x*size+1, curser_y*size+1, YELLOW);
+        drawPixel(curser_x*size+1, curser_y*size-1, YELLOW);
+        drawPixel(curser_x*size-1, curser_y*size+1, YELLOW);
     }
-    else if (button_control == 2){
-        drawPixel(curser_x, curser_y, YELLOW);
+    // else if (button_control == 2){
+    //     drawPixel(curser_x, curser_y, YELLOW);
+    // }
+}
+
+void draw_zoomin(){
+    if (button_control == 2){
+        // if(potentio_read)
+        int zoom_length = zoom_unit_size * zoom_size_set;
+        // printf("length:%d\n", zoom_length);
+        drawRect(curser_x, curser_y, zoom_length, zoom_length, MAGENTA );
+        zoom_start_x = curser_x;
+        zoom_start_y = curser_y;
+        zoom_end_x = curser_x + zoom_length;
+        zoom_end_y = curser_y + zoom_length;
+        
     }
+}
+
+void menu() {
+    // printf("%d\n", button_control);
+    if (button_control == -1) {
+        sprintf(text1, "1.Conway Game of Life - Pi");
+        setCursor(10, 10);
+        if (menu_choice == 0) {
+            setTextColor2(BLACK, WHITE);
+        } else {
+            setTextColor2(WHITE, BLACK);
+        }
+        setTextSize(1);
+        writeString(text1);
+    
+        sprintf(text1, "2.Conway Game of Life - Random");
+        setCursor(10, 20);
+        // setTextColor2(WHITE, BLACK);
+        if (menu_choice == 1) {
+            setTextColor2(BLACK, WHITE);
+        } else {
+            setTextColor2(WHITE, BLACK);
+        }
+        setTextSize(1);
+        writeString(text1);
+
+        sprintf(text1, "3.Mandelbrot Set");
+        setCursor(10, 30);
+        // setTextColor2(WHITE, BLACK);
+        if (menu_choice == 2) {
+            setTextColor2(BLACK, WHITE);
+        } else {
+            setTextColor2(WHITE, BLACK);
+        }
+        setTextSize(1);
+        writeString(text1);
+
+    }
+}
+const char* conway_title[] = { "Conway", "Game", "of", "Life" };
+const char* mandelbrot_title[] = { "Mandel-","brot", "Set" };
+
+void draw_title_area( const char* title_words[], int word_count ) {
+    // Fill the rightmost 112-pixel-wide strip with white
+    fillRect(528,0,112,480,WHITE);
+
+    // Display one word per line, left-aligned in the white strip
+    for (int i = 0; i < word_count; i++) {
+        sprintf(text1, "%s", title_words[i]);
+
+        setCursor(530, 100 + i * 30); // vertical spacing, adjust as needed
+        setTextColor2(BLACK, WHITE);
+        setTextSize(2);
+        writeString(text1);
+    }
+}
+
+void draw_title(){
+    if (button_control == 0 || button_control == 1){
+        draw_title_area(conway_title, 4);
+    }else if (button_control == 2){
+        draw_title_area(mandelbrot_title, 3);
+    }
+
 }
 
 void mandelbrot() {
     if(button_control == 2) {
-        fillRect(0, 0, 320, 480, BLACK);
+        fillRect(0, 0, WIDTH_DISPLAY, HEIGHT, BLACK);
     
         float Zre, Zim, Cre, Cim ;
         float Zre_sq, Zim_sq ;
         int n, i, j ;
-        for (i = 0; i < WIDTH; ++i) {
+        for (i = 0; i < WIDTH_DISPLAY; ++i) {
             for (j = 0; j < HEIGHT; ++j) {
                 Zre = Zim = Zre_sq = Zim_sq = 0;
                 Cre = x[i] ;
@@ -352,14 +447,15 @@ void mandelbrot() {
                     n++;
                     // printf("n: %d\n", n);
                 }
-                if (n >= MAX_ITER) drawPixel(i, j, BLACK) ;
-                else if (n >= (MAX_ITER>>1)) drawPixel(i, j, WHITE) ;
-                else if (n >= (MAX_ITER>>2)) drawPixel(i, j, YELLOW) ;
-                else if (n >= (MAX_ITER>>3)) drawPixel(i, j, MED_GREEN) ;
-                else if (n >= (MAX_ITER>>4)) drawPixel(i, j, RED) ;
-                else if (n >= (MAX_ITER>>5)) drawPixel(i, j, DARK_ORANGE) ;
-                else if (n >= (MAX_ITER>>6)) drawPixel(i, j, ORANGE) ;
-                else drawPixel(i, j, PINK) ;
+                if (n >= MAX_ITER) {drawPixel(i, j, BLACK) ;}
+                else if (n >= (MAX_ITER>>1)) {drawPixel(i, j, WHITE); }
+                else if (n >= (MAX_ITER>>2)) {drawPixel(i, j, YELLOW); }
+                else if (n >= (MAX_ITER>>3)) {drawPixel(i, j, MED_GREEN); ;}
+                else if (n >= (MAX_ITER>>4)) {drawPixel(i, j, RED); }
+                else if (n >= (MAX_ITER>>5)) {drawPixel(i, j, DARK_ORANGE); }
+                else if (n >= (MAX_ITER>>6)) {drawPixel(i, j, ORANGE); }
+                else {drawPixel(i, j, PINK);}
+                 
             }
         }
     }
@@ -393,8 +489,14 @@ void button_pressing_switch( )
     if (button_value_switch == possible_switch){
         printf("switch button pressed\n");
         button_value_switch = gpio_get(BUTTON_PIN);
-        button_control += (button_control == 3)?-3:1; //remainder 1:,2:,3
+        // button_control += (button_control == 3)?-3:1; //remainder 1:,2:,3
         button_state_switch = BUTTON_PRESSED;
+        if (button_control == -1) {
+            menu_choice = (menu_choice + 1) % 3;
+        }
+        else {
+            button_control = -1;
+        }
     }
     else{
         button_value_switch = gpio_get(BUTTON_PIN);
@@ -461,10 +563,10 @@ void button_pressing_left()
             down_control = 0;
             confirm_control = 0;
             
-            curser_x -= previous_left;
-            previous_left *= 2;
+            curser_x -= previous_up;
+            previous_up *= acc;
             previous_down = 1;
-            previous_up = 1;
+            previous_left = 1;
             previous_right = 1;
 
             button_state_left = BUTTON_PRESSED;
@@ -536,7 +638,7 @@ void button_pressing_right()
             confirm_control = 0;
 
             curser_x += previous_right;
-            previous_right *= 2;
+            previous_right *= acc;
             previous_down = 1;
             previous_up = 1;
             previous_left = 1;
@@ -612,7 +714,7 @@ void button_pressing_up()
             confirm_control = 0;
 
             curser_y -= previous_up;
-            previous_up *= 2;
+            previous_up *= acc;
             previous_down = 1;
             previous_left = 1;
             previous_right = 1;
@@ -687,7 +789,7 @@ void button_pressing_down()
             confirm_control = 0;
 
             curser_y += previous_down;
-            previous_down *= 2;
+            previous_down *= acc;
             previous_left = 1;
             previous_up = 1;
             previous_right = 1;
@@ -728,6 +830,9 @@ void button_pressing_down()
         break;
     }
 }
+
+uint8_t change_man = 0;
+
 void button_pressing_confirm()
 {
     switch (button_state_confirm)
@@ -759,9 +864,17 @@ void button_pressing_confirm()
             right_control = 0;
             up_control = 0;
             down_control = 0;
-            if (button_control == 0 || button_control == 1) {
+            // printf("button_ctrl%d", button_control);
+            if (button_control == -1) button_control = menu_choice;
+            else if (button_control == 2) change_man = 1;
+            else if (button_control == 0 || button_control == 1) {
+                printf("live_cnt%d", live_count);
                 for(int j = 0; j < live_count; j++) {
-                    drawcell(live_x[j], live_y[j], 1);
+                    drawPixel(live_x[live_count]+1, live_y[live_count]+1, BLACK);
+                    drawPixel(live_x[live_count]+1, live_y[live_count]-1, BLACK);
+                    drawPixel(live_x[live_count]-1, live_y[live_count]+1, BLACK);
+                    drawPixel(live_x[live_count], live_y[live_count], BLACK);
+                    drawcell(live_x[j]/size, live_y[j] /size, 1);
                     live_x[j] = -1;
                     live_y[j] = -1;
                 }   
@@ -814,8 +927,8 @@ void button_pressing_confirm()
 void random_initial(){
     if ( button_control == 1 && start_init) {
         start_init = 0;
-        for (int i = 0; i < 240/size; i++){
-            for(int j = 0; j < 320/size; j++){
+        for (int i = 0; i < WIDTH_DISPLAY/size; i++){
+            for(int j = 0; j < HEIGHT/size; j++){
                 srand(time_us_32()); // Use microsecond timer to seed
                 int rand_bit = rand() % 2;
                 drawcell(i, j, rand_bit);
@@ -826,13 +939,13 @@ void random_initial(){
 }
 
 void pi_initial(){
-    int x_offset[6] = {50, 120, 50, 120, 50, 120};    // starting x position
-    int y_offset[6] = {70, 70, 150, 150, 230, 230};    // starting y position
+    int x_offset[4] = {50, 120, 50, 120};    // starting x position
+    int y_offset[4] = {70, 70, 150, 150};    // starting y position
     int height = 50;      // height of vertical legs
     int bar_width = 40;   // width of the top bar
     if (button_control == 0 && start_init) {
         start_init = 0;
-    for (int i = 0; i < 6; i++){
+    for (int i = 0; i < 4; i++){
         int left_x = x_offset[i];
         int right_x = x_offset[i] + bar_width - 1;
         
@@ -864,7 +977,7 @@ void pi_initial(){
 
 int is_alive(int x, int y) {
     int cnt = 0;
-    if (x > 0 & y > 0 & x < (240/size-1) & y < (320/size-1)) {
+    if (x > 0 & y > 0 & x < (WIDTH_DISPLAY/size-1) & y < (HEIGHT/size-1)) {
         cnt = cell_array[x-1][y-1] + cell_array[x-1][y]
                 + cell_array[x-1][y+1] + cell_array[x][y-1] + cell_array[x][y+1]
                 + cell_array[x+1][y-1] + cell_array[x+1][y] + cell_array[x+1][y+1];
@@ -872,13 +985,13 @@ int is_alive(int x, int y) {
     else if ( x == 0 && y == 0) {
         cnt = cell_array[x][y+1] + cell_array[x+1][y] + cell_array[x+1][y+1];
     }
-    else if ( x == (240/size-1) && y == (320/size-1)) {
+    else if ( x == (WIDTH_DISPLAY/size-1) && y == (HEIGHT/size-1)) {
         cnt = cell_array[x-1][y-1] + cell_array[x-1][y] + cell_array[x][y-1];
     }
-    else if ( x == 0 && y == (320/size-1)) {
+    else if ( x == 0 && y == (HEIGHT/size-1)) {
         cnt = cell_array[x][y-1] + cell_array[x+1][y-1] + cell_array[x+1][y];
     }
-    else if ( x == (240/size-1) && y == 0) {
+    else if ( x == (WIDTH_DISPLAY/size-1) && y == 0) {
         cnt = cell_array[x-1][y] + cell_array[x-1][y+1] + cell_array[x][y+1];
     }
     else if ( x == 0) {
@@ -889,11 +1002,11 @@ int is_alive(int x, int y) {
         cnt = cell_array[x-1][y] + cell_array[x-1][y+1] 
             + cell_array[x][y+1] + cell_array[x+1][y] + cell_array[x+1][y+1];
     }
-    else if (x == (240/size-1)) {
+    else if (x == (WIDTH_DISPLAY/size-1)) {
         cnt = cell_array[x-1][y-1] + cell_array[x-1][y]
                 + cell_array[x-1][y+1] + cell_array[x][y-1] + cell_array[x][y+1];
     }
-    else if (y == (320/size-1)) {
+    else if (y == (HEIGHT/size-1)) {
         cnt = cell_array[x-1][y-1] + cell_array[x-1][y]
                 + cell_array[x][y-1] + cell_array[x+1][y-1] + cell_array[x+1][y];
     }
@@ -910,8 +1023,8 @@ int is_alive(int x, int y) {
 
 void update_alive(){
 
-    for (int i = 0; i< (240/size); i++){
-        for (int j = 0; j < (320/size); j++){
+    for (int i = 0; i< (WIDTH_DISPLAY/size); i++){
+        for (int j = 0; j < (HEIGHT/size); j++){
             alive = is_alive (i,j);
             if ( alive )
                 alive_count++;
@@ -922,8 +1035,8 @@ void update_alive(){
 }
 
 void update_cell(){
-    for (int i = 0; i< (240/size); i++){
-        for (int j = 0; j < (320/size); j++){
+    for (int i = 0; i< (WIDTH_DISPLAY/size); i++){
+        for (int j = 0; j < (HEIGHT/size); j++){
             if (cell_array[i][j] != cell_array_next[i][j]) {
                 if (cell_array_next[i][j]){
                     drawcell(i, j, 1);
@@ -966,15 +1079,62 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     while(1){
         // button_value = gpio_get(BUTTON_PIN);
         // printf("button_control: %d, prev:%d\n", button_control, button_control_prev);
+        if (button_control == -1) {
+            menu();
+            PT_YIELD_usec(5000);
+            continue;
+        }
         alive_count = 0;
         if (button_control != button_control_prev) {
+            x_min = -2;
+            x_max = 1;
+            y_min = -1;
+            y_max = 1;
             button_control_prev = button_control;
-            fillRect(0, 0, 320, 480, BLACK);
+            fillRect(0, 0, WIDTH, HEIGHT, BLACK);
             memset(cell_array, 0, sizeof(cell_array));
             memset(cell_array_next, 0, sizeof(cell_array_next));
             start_init = 1;
-            if(button_control == 2)
+            curser_x = default_curser_x;
+            curser_y = default_curser_y;
+            if(button_control == 2){
+                for (int i = 0; i < WIDTH_DISPLAY; i++) {
+                    x[i] = x_min + (x_max - x_min) * i / (WIDTH_DISPLAY - 1);
+                }
+                
+                for (int i = 0; i < HEIGHT; i++) {
+                    y[i] = y_min + (y_max - y_min) * i / (HEIGHT - 1);
+                }
                 mandelbrot();
+            }
+                
+        }
+        // printf("change:%d\n", change_man);
+        if (change_man) {
+        
+            float x_c, y_c;
+            float x1, x2 = 0;
+            float y1, y2 = 0;
+            x1 = x_min + zoom_start_x * (x_max - x_min) / WIDTH_DISPLAY;
+            x2 = x_min + zoom_end_x * (x_max - x_min) / WIDTH_DISPLAY;
+            y1 = y_min + zoom_start_y * (y_max - y_min) / WIDTH_DISPLAY;
+            y2 = y_min + zoom_end_y * (y_max - y_min) / WIDTH_DISPLAY;
+            x_c = (x1 + x2) / 2;
+            y_c = (y1 + y2) / 2;
+            x_min = x_c - (x2 - x1) / 2;
+            x_max = x_c + (x2 - x1) / 2;
+            y_min = y_c - (y2 - y1) / 2;
+            y_max = y_c + (y2 - y1) / 2;
+            for (int i = 0; i < WIDTH_DISPLAY; i++) {
+                x[i] = x_min + (x_max - x_min) * i / (WIDTH_DISPLAY - 1);
+            }
+            
+            for (int i = 0; i < HEIGHT; i++) {
+                y[i] = y_min + (y_max - y_min) * i / (HEIGHT - 1);
+            }
+
+            mandelbrot();
+            change_man = 0;
         }
 
         pi_initial();
@@ -982,6 +1142,8 @@ static PT_THREAD (protothread_anim(struct pt *pt))
         update_alive();
         update_cell(); 
         draw_curser();
+        draw_zoomin();
+        draw_title();
         
         
         PT_YIELD_usec(1000) ;
@@ -1011,7 +1173,6 @@ static PT_THREAD (protothread_btn(struct pt *pt))
 
         alarm_irq();
         // button_value = gpio_get(BUTTON_PIN)
-        menu();
 
         PT_YIELD_usec(1000) ;
     }
@@ -1028,15 +1189,7 @@ static PT_THREAD (protothread_mouse(struct pt *pt))
     // random_initial();
 
     while(1){
-        // mouse_control();
-        // printf("x: %d, y: %d", curser_x, curser_y);
-        left_control = 0;
-        right_control = 0;
-        up_control = 0;
-        down_control = 0;
-        confirm_control = 0;
-
-        
+        change_zoom_size();
 
         PT_YIELD_usec(1000) ;
     }
@@ -1055,7 +1208,8 @@ void core1_main(){
 int main(){
     
     stdio_init_all(); //Initialize all of the present standard stdio types that are linked into the binary
-    
+    adc_init();
+    adc_gpio_init(ADC_PIN);
     // initialize button gpio
     gpio_init(BUTTON_PIN);
     gpio_init(PIN_UP);
@@ -1073,17 +1227,8 @@ int main(){
 
     initVGA(); //Initialize the hardware for the TFT
     // tft_begin(); //Initialize the TFT
-    fillRect(0, 0, 320, 480, BLACK); //Fill the entire screen with black colour
+    fillRect(0, 0, WIDTH, HEIGHT, BLACK); //Fill the entire screen with black colour
     // initialize the array 
-    float x_min = -2.0, x_max = 1.0;
-    float y_min = -2.0, y_max = 1.0;
-    for (int i = 0; i < WIDTH; i++) {
-        x[i] = x_min + (x_max - x_min) * i / (WIDTH - 1);
-    }
-    
-    for (int i = 0; i < HEIGHT; i++) {
-        y[i] = y_min + (y_max - y_min) * i / (HEIGHT - 1);
-    }
     
     // Beep
     // Initialize SPI channel (channel, baud rate set to 20MHz)
@@ -1136,7 +1281,7 @@ int main(){
     // add threads
     pt_add_thread(protothread_btn);
     // pt_add_thread(protothread_update_alive);
-    // pt_add_thread(protothread_mouse);
+    pt_add_thread(protothread_mouse);
 
 
     // start scheduler
